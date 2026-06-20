@@ -1,6 +1,6 @@
 import { get_encoding } from "tiktoken";
 import { sessionUsageCache, Usage } from "./cache";
-import { readFile } from "fs/promises";
+import { readFile, appendFile } from "fs/promises";
 import { opendir, stat } from "fs/promises";
 import { join } from "path";
 import { CLAUDE_PROJECTS_DIR, HOME_DIR } from "@CCR/shared";
@@ -199,6 +199,71 @@ const getUseModel = async (
   return { model: Router?.default, scenarioType: 'default' };
 };
 
+function getLastUserMessageText(messages: MessageParam[]): string {
+  if (!Array.isArray(messages)) return '';
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === 'user') {
+      if (typeof msg.content === 'string') {
+        return msg.content;
+      } else if (Array.isArray(msg.content)) {
+        return msg.content
+          .filter((block: any) => block.type === 'text')
+          .map((block: any) => block.text || '')
+          .join('');
+      }
+    }
+  }
+  return '';
+}
+
+function getTransformerNames(model: string, configService: ConfigService): string[] {
+  if (!model || !model.includes(',')) return [];
+  const commaIndex = model.indexOf(',');
+  const providerName = model.slice(0, commaIndex);
+  const modelName = model.slice(commaIndex + 1);
+  const providers = configService.get<any[]>('providers') || [];
+  const provider = providers.find((p: any) => p.name?.toLowerCase() === providerName.toLowerCase());
+  if (!provider) return [];
+
+  const names: string[] = [];
+  const extractName = (t: any) => {
+    if (typeof t === 'string') return t;
+    if (Array.isArray(t) && typeof t[0] === 'string') return t[0];
+    return null;
+  };
+
+  if (Array.isArray(provider.transformer?.use)) {
+    for (const t of provider.transformer.use) {
+      const name = extractName(t);
+      if (name) names.push(name);
+    }
+  }
+  if (Array.isArray(provider.transformer?.[modelName]?.use)) {
+    for (const t of provider.transformer[modelName].use) {
+      const name = extractName(t);
+      if (name) names.push(name);
+    }
+  }
+  return names;
+}
+
+async function writeRouteLog(req: any, model: string, configService: ConfigService): Promise<void> {
+  try {
+    const entry = {
+      time: new Date().toLocaleString(),
+      reqId: req.id,
+      msg: getLastUserMessageText(req.body?.messages || []),
+      route: req.scenarioType || 'default',
+      model,
+      transformers: getTransformerNames(model, configService),
+    };
+    await appendFile(join(HOME_DIR, 'route.log'), JSON.stringify(entry) + '\n');
+  } catch {
+    // Do not let logging errors affect the main request
+  }
+}
+
 export interface RouterContext {
   configService: ConfigService;
   tokenizerService?: TokenizerService;
@@ -288,11 +353,13 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
       req.scenarioType = 'default';
     }
     req.body.model = model;
+    await writeRouteLog(req, model, configService);
   } catch (error: any) {
     req.log.error(`Error in router middleware: ${error.message}`);
     const Router = configService.get("Router");
     req.body.model = Router?.default;
     req.scenarioType = 'default';
+    await writeRouteLog(req, req.body.model, configService);
   }
   return;
 };
