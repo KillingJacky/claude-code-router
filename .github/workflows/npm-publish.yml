@@ -66,6 +66,12 @@ jobs:
         run: npm pack --dry-run
 
       - name: Publish to npm
-        run: npm publish --provenance
-        # Do NOT set NODE_AUTH_TOKEN: OIDC trusted publishing must have no token at all,
-        # not even an empty string, or npm won't fall back to OIDC.
+        run: |
+          # actions/setup-node writes an _authToken line into ~/.npmrc that references
+          # NODE_AUTH_TOKEN. For OIDC trusted publishing there must be NO token at all
+          # (not even empty), so strip it and unset the variable before publishing.
+          unset NODE_AUTH_TOKEN
+          if [ -f ~/.npmrc ]; then
+            sed -i -E '/_authToken|_auth|always-auth/d' ~/.npmrc
+          fi
+          npm publish --provenance
