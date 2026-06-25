@@ -39,6 +39,10 @@
   ],
   "author": "killingjacky",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KillingJacky/claude-code-router.git"
+  },
   "devDependencies": {
     "@types/node": "^24.0.15",
     "esbuild": "^0.25.1",
