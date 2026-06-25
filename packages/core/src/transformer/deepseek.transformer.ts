@@ -1,17 +1,82 @@
-import { UnifiedChatRequest } from "../types/llm";
-import { Transformer } from "../types/transformer";
+import { UnifiedChatRequest, UnifiedMessage } from "../types/llm";
+import { Transformer, TransformerContext } from "../types/transformer";
+
+type DeepSeekAssistantMessage = UnifiedMessage & {
+  reasoning_content?: string;
+};
+
+function extractReasoningContent(
+  message: DeepSeekAssistantMessage
+): string | undefined {
+  if (message.reasoning_content) {
+    return message.reasoning_content;
+  }
+
+  if (message.thinking?.content) {
+    return message.thinking.content;
+  }
+
+  if (typeof message.content !== "string") {
+    return undefined;
+  }
+
+  const match = message.content.match(
+    /<reasoning_content>([\s\S]*?)<\/reasoning_content>/
+  );
+  return match?.[1]?.trim() || undefined;
+}
+
+function applyReasoningContent(
+  message: DeepSeekAssistantMessage,
+  reasoningContent?: string
+) {
+  if (!reasoningContent) {
+    return false;
+  }
+
+  message.reasoning_content = reasoningContent;
+  delete message.thinking;
+
+  if (typeof message.content === "string") {
+    message.content = message.content.replace(
+      /<reasoning_content>[\s\S]*?<\/reasoning_content>\n?/,
+      ""
+    );
+  }
+
+  return true;
+}
 
 export class DeepseekTransformer implements Transformer {
   name = "deepseek";
 
-  async transformRequestIn(request: UnifiedChatRequest): Promise<UnifiedChatRequest> {
+  async transformRequestIn(
+    request: UnifiedChatRequest,
+    _provider: any,
+    context: TransformerContext
+  ): Promise<UnifiedChatRequest> {
+    const assistantMessages = request.messages.filter(
+      (message) => message.role === "assistant"
+    );
+
+    assistantMessages.forEach((message) => {
+      const assistantMessage = message as DeepSeekAssistantMessage;
+      applyReasoningContent(
+        assistantMessage,
+        extractReasoningContent(assistantMessage)
+      );
+    });
+
     if (request.max_tokens && request.max_tokens > 8192) {
       request.max_tokens = 8192; // DeepSeek has a max token limit of 8192
     }
     return request;
   }
 
-  async transformResponseOut(response: Response): Promise<Response> {
+  async transformResponseOut(
+    response: Response,
+    context?: TransformerContext
+  ): Promise<Response> {
     if (response.headers.get("Content-Type")?.includes("application/json")) {
       const jsonResponse = await response.json();
       // Handle non-streaming response if needed
@@ -132,10 +197,11 @@ export class DeepseekTransformer implements Transformer {
                   delete data.choices[0].delta.reasoning_content;
                 }
 
-                // Send the modified chunk
+                // Send the modified chunk (also pass through usage-only chunks where delta is empty)
                 if (
-                  data.choices?.[0]?.delta &&
-                  Object.keys(data.choices[0].delta).length > 0
+                  data.usage ||
+                  (data.choices?.[0]?.delta &&
+                    Object.keys(data.choices[0].delta).length > 0)
                 ) {
                   if (context.isReasoningComplete()) {
                     data.choices[0].index++;

@@ -162,11 +162,11 @@ export class AnthropicTransformer implements Transformer {
             }
 
             const thinkingPart = msg.content.find(
-              (c: any) => c.type === "thinking" && c.signature
+              (c: any) => c.type === "thinking"
             );
             if (thinkingPart) {
               assistantMessage.thinking = {
-                content: thinkingPart.thinking,
+                content: thinkingPart.text || thinkingPart.thinking || "",
                 signature: thinkingPart.signature,
               };
             }
@@ -429,7 +429,7 @@ export class AnthropicTransformer implements Transformer {
             buffer = lines.pop() || "";
 
             for (const line of lines) {
-              if (isClosed || hasFinished) break;
+              if (isClosed) break;
 
               if (!line.startsWith("data:")) continue;
               const data = line.slice(5).trim();
@@ -909,7 +909,7 @@ export class AnthropicTransformer implements Transformer {
                     };
                   }
 
-                  break;
+                  hasFinished = true;
                 }
               } catch (parseError: any) {
                 this.logger?.error(
@@ -1018,11 +1018,14 @@ export class AnthropicTransformer implements Transformer {
           });
         });
       }
-      if ((choice.message as any)?.thinking?.content) {
+      const thinkingContent =
+        (choice.message as any)?.thinking?.content ||
+        (choice.message as any)?.reasoning_content;
+      if (thinkingContent) {
         content.push({
           type: "thinking",
-          thinking: (choice.message as any).thinking.content,
-          signature: (choice.message as any).thinking.signature,
+          thinking: thinkingContent,
+          signature: (choice.message as any).thinking?.signature,
         });
       }
       const result = {
