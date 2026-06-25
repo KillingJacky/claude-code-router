@@ -1,6 +1,6 @@
 {
   "name": "@killingjacky/claude-code-router",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Use Claude Code without an Anthropics account and route it to another LLM provider",
   "files": [
     "dist",
@@ -37,7 +37,7 @@
     "llm",
     "anthropic"
   ],
-  "author": "musistudio",
+  "author": "killingjacky",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^24.0.15",
