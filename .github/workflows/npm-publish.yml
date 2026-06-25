@@ -25,6 +25,9 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false # never use caching in release builds
 
+      - name: Update npm to latest
+        run: npm install -g npm@latest
+
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -64,5 +67,5 @@ jobs:
 
       - name: Publish to npm
         run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ""
+        # Do NOT set NODE_AUTH_TOKEN: OIDC trusted publishing must have no token at all,
+        # not even an empty string, or npm won't fall back to OIDC.
