@@ -1,6 +1,6 @@
 {
   "name": "@killingjacky/claude-code-router",
-  "version": "2.1.0",
+  "version": "2.1.2",
   "description": "Use Claude Code without an Anthropics account and route it to another LLM provider",
   "files": [
     "dist",
@@ -8,7 +8,8 @@
     "LICENSE"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "pnpm build:shared && pnpm build:core && pnpm build:server && pnpm build:cli && pnpm build:ui",
@@ -37,8 +38,12 @@
     "llm",
     "anthropic"
   ],
-  "author": "musistudio",
+  "author": "killingjacky",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KillingJacky/claude-code-router.git"
+  },
   "devDependencies": {
     "@types/node": "^24.0.15",
     "esbuild": "^0.25.1",
