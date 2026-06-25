@@ -223,7 +223,7 @@ async function processRequestTransformers(
 
   // Execute transformer's transformRequestOut method
   if (!bypass && typeof transformer.transformRequestOut === "function") {
-    const transformOut = await transformer.transformRequestOut(requestBody);
+    const transformOut = await transformer.transformRequestOut(requestBody, context);
     if (transformOut.body) {
       requestBody = transformOut.body;
       config = transformOut.config || {};

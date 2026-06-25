@@ -45,7 +45,8 @@ export class AnthropicTransformer implements Transformer {
   }
 
   async transformRequestOut(
-    request: Record<string, any>
+    request: Record<string, any>,
+    context: TransformerContext
   ): Promise<UnifiedChatRequest> {
     const messages: UnifiedMessage[] = [];
 
@@ -161,11 +162,11 @@ export class AnthropicTransformer implements Transformer {
             }
 
             const thinkingPart = msg.content.find(
-              (c: any) => c.type === "thinking" && c.signature
+              (c: any) => c.type === "thinking"
             );
             if (thinkingPart) {
               assistantMessage.thinking = {
-                content: thinkingPart.thinking,
+                content: thinkingPart.text || thinkingPart.thinking || "",
                 signature: thinkingPart.signature,
               };
             }
@@ -188,6 +189,13 @@ export class AnthropicTransformer implements Transformer {
         : undefined,
       tool_choice: request.tool_choice,
     };
+    if (request.stream) {
+      (result as UnifiedChatRequest & {
+        stream_options?: { include_usage: boolean };
+      }).stream_options = {
+        include_usage: true,
+      };
+    }
     if (request.thinking) {
       result.reasoning = {
         effort: getThinkLevel(request.thinking.budget_tokens),
@@ -275,12 +283,35 @@ export class AnthropicTransformer implements Transformer {
         let isThinkingStarted = false;
         let contentIndex = 0;
         let currentContentBlockIndex = -1; // Track the current content block index
+        let latestUsage = {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        };
 
         // 原子性的content block index分配函数
         const assignContentBlockIndex = (): number => {
           const currentIndex = contentIndex;
           contentIndex++;
           return currentIndex;
+        };
+
+        const mapOpenAIUsageToAnthropic = (usage?: any) => {
+          const promptTokens = usage?.prompt_tokens || 0;
+          const promptTokenDetails = usage?.prompt_tokens_details || {};
+          const cacheReadInputTokens = promptTokenDetails.cached_tokens || 0;
+          const cacheCreationInputTokens =
+            promptTokenDetails.cache_creation_tokens || 0;
+
+          latestUsage = {
+            input_tokens: promptTokens - cacheReadInputTokens,
+            output_tokens: usage?.completion_tokens || 0,
+            cache_creation_input_tokens: cacheCreationInputTokens,
+            cache_read_input_tokens: cacheReadInputTokens,
+          };
+
+          return latestUsage;
         };
 
         const safeEnqueue = (data: Uint8Array) => {
@@ -348,11 +379,7 @@ export class AnthropicTransformer implements Transformer {
                         stop_reason: "end_turn",
                         stop_sequence: null,
                       },
-                      usage: {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        cache_read_input_tokens: 0,
-                      },
+                      usage: latestUsage,
                     })}\n\n`
                   )
                 );
@@ -402,7 +429,7 @@ export class AnthropicTransformer implements Transformer {
             buffer = lines.pop() || "";
 
             for (const line of lines) {
-              if (isClosed || hasFinished) break;
+              if (isClosed) break;
 
               if (!line.startsWith("data:")) continue;
               const data = line.slice(5).trim();
@@ -456,10 +483,7 @@ export class AnthropicTransformer implements Transformer {
                       model: model,
                       stop_reason: null,
                       stop_sequence: null,
-                      usage: {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                      },
+                      usage: latestUsage,
                     },
                   };
 
@@ -474,6 +498,7 @@ export class AnthropicTransformer implements Transformer {
 
                 const choice = chunk.choices?.[0];
                 if (chunk.usage) {
+                  const anthropicUsage = mapOpenAIUsageToAnthropic(chunk.usage);
                   if (!stopReasonMessageDelta) {
                     stopReasonMessageDelta = {
                       type: "message_delta",
@@ -481,27 +506,10 @@ export class AnthropicTransformer implements Transformer {
                         stop_reason: "end_turn",
                         stop_sequence: null,
                       },
-                      usage: {
-                        input_tokens:
-                          (chunk.usage?.prompt_tokens || 0) -
-                          (chunk.usage?.prompt_tokens_details?.cached_tokens ||
-                            0),
-                        output_tokens: chunk.usage?.completion_tokens || 0,
-                        cache_read_input_tokens:
-                          chunk.usage?.prompt_tokens_details?.cached_tokens ||
-                          0,
-                      },
+                      usage: anthropicUsage,
                     };
                   } else {
-                    stopReasonMessageDelta.usage = {
-                      input_tokens:
-                        (chunk.usage?.prompt_tokens || 0) -
-                        (chunk.usage?.prompt_tokens_details?.cached_tokens ||
-                          0),
-                      output_tokens: chunk.usage?.completion_tokens || 0,
-                      cache_read_input_tokens:
-                        chunk.usage?.prompt_tokens_details?.cached_tokens || 0,
-                    };
+                    stopReasonMessageDelta.usage = anthropicUsage;
                   }
                 }
                 if (!choice) {
@@ -895,20 +903,13 @@ export class AnthropicTransformer implements Transformer {
                         stop_reason: anthropicStopReason,
                         stop_sequence: null,
                       },
-                      usage: {
-                        input_tokens:
-                          (chunk.usage?.prompt_tokens || 0) -
-                          (chunk.usage?.prompt_tokens_details?.cached_tokens ||
-                            0),
-                        output_tokens: chunk.usage?.completion_tokens || 0,
-                        cache_read_input_tokens:
-                          chunk.usage?.prompt_tokens_details?.cached_tokens ||
-                          0,
-                      },
+                      usage: chunk.usage
+                        ? mapOpenAIUsageToAnthropic(chunk.usage)
+                        : latestUsage,
                     };
                   }
 
-                  break;
+                  hasFinished = true;
                 }
               } catch (parseError: any) {
                 this.logger?.error(
@@ -1017,11 +1018,14 @@ export class AnthropicTransformer implements Transformer {
           });
         });
       }
-      if ((choice.message as any)?.thinking?.content) {
+      const thinkingContent =
+        (choice.message as any)?.thinking?.content ||
+        (choice.message as any)?.reasoning_content;
+      if (thinkingContent) {
         content.push({
           type: "thinking",
-          thinking: (choice.message as any).thinking.content,
-          signature: (choice.message as any).thinking.signature,
+          thinking: thinkingContent,
+          signature: (choice.message as any).thinking?.signature,
         });
       }
       const result = {
