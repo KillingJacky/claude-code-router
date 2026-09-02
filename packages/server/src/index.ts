@@ -211,6 +211,7 @@ async function getServer(options: RunOptions = {}) {
   serverInstance.addHook("preHandler", async (req: any, reply: any) => {
     if (req.pathname.endsWith("/v1/messages")) {
       const useAgents = []
+      const originalSystemLength = req.body?.system?.length || 0
 
       for (const agent of agentsManager.getAllAgents()) {
         if (agent.shouldHandle(req, config)) {
@@ -238,6 +239,7 @@ async function getServer(options: RunOptions = {}) {
 
       if (useAgents.length) {
         req.agents = useAgents;
+        req.agentOriginalSystemLength = originalSystemLength;
       }
     }
   });
@@ -245,11 +247,13 @@ async function getServer(options: RunOptions = {}) {
     event.emit('onError', request, reply, error);
   })
   serverInstance.addHook("onSend", (req: any, reply: any, payload: any, done: any) => {
-    if (req.sessionId && req.pathname.endsWith("/v1/messages")) {
+    if (req.pathname.endsWith("/v1/messages")) {
       if (payload instanceof ReadableStream) {
         if (req.agents) {
           const abortController = new AbortController();
-          const eventStream = payload.pipeThrough(new SSEParserTransform())
+          const eventStream = payload
+            .pipeThrough(new TextDecoderStream())
+            .pipeThrough(new SSEParserTransform())
           let currentAgent: undefined | IAgent;
           let currentToolIndex = -1
           let currentToolName = ''
@@ -317,18 +321,33 @@ async function getServer(options: RunOptions = {}) {
                   role: 'user',
                   content: toolMessages
                 })
+                const agentToolNames = new Set(
+                  req.agents.flatMap((name: string) =>
+                    Array.from(agentsManager.getAgent(name)?.tools.keys() || [])
+                  )
+                )
+                const nextBody = {
+                  ...req.body,
+                  model: req.provider && req.model?.length
+                    ? [req.provider, ...req.model].join(',')
+                    : req.body.model,
+                  system: req.body.system?.slice(0, req.agentOriginalSystemLength),
+                  tools: req.body.tools?.filter((tool: any) => !agentToolNames.has(tool.name)),
+                }
                 const response = await fetch(`http://127.0.0.1:${config.PORT || 3456}/v1/messages`, {
                   method: "POST",
                   headers: {
                     'x-api-key': config.APIKEY,
                     'content-type': 'application/json',
                   },
-                  body: JSON.stringify(req.body),
+                  body: JSON.stringify(nextBody),
                 })
                 if (!response.ok) {
                   return undefined;
                 }
-                const stream = response.body!.pipeThrough(new SSEParserTransform() as any)
+                const stream = response.body!
+                  .pipeThrough(new TextDecoderStream())
+                  .pipeThrough(new SSEParserTransform())
                 const reader = stream.getReader()
                 while (true) {
                   try {
@@ -339,11 +358,6 @@ async function getServer(options: RunOptions = {}) {
                     const eventData = value as any;
                     if (['message_start', 'message_stop'].includes(eventData.event)) {
                       continue
-                    }
-
-                    // Check if stream is still writable
-                    if (!controller.desiredSize) {
-                      break;
                     }
 
                     controller.enqueue(eventData)
@@ -389,7 +403,9 @@ async function getServer(options: RunOptions = {}) {
               const str = dataStr.slice(27);
               try {
                 const message = JSON.parse(str);
-                sessionUsageCache.put(req.sessionId, message.usage);
+                if (req.sessionId) {
+                  sessionUsageCache.put(req.sessionId, message.usage);
+                }
               } catch {}
             }
           } catch (readError: any) {
@@ -405,7 +421,9 @@ async function getServer(options: RunOptions = {}) {
         read(clonedStream);
         return done(null, originalStream)
       }
-      sessionUsageCache.put(req.sessionId, payload.usage);
+      if (req.sessionId) {
+        sessionUsageCache.put(req.sessionId, payload.usage);
+      }
       if (typeof payload ==='object') {
         if (payload.error) {
           return done(payload.error, null)

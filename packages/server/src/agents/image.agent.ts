@@ -58,12 +58,14 @@ export class ImageAgent implements IAgent {
   shouldHandle(req: any, config: any): boolean {
     if (!config.Router.image || req.body.model === config.Router.image)
       return false;
-    const lastMessage = req.body.messages[req.body.messages.length - 1];
+    const lastUserMessage = [...req.body.messages]
+      .reverse()
+      .find((message: any) => message.role === "user");
     if (
       !config.forceUseImageAgent &&
-      lastMessage.role === "user" &&
-      Array.isArray(lastMessage.content) &&
-      lastMessage.content.find(
+      lastUserMessage &&
+      Array.isArray(lastUserMessage.content) &&
+      lastUserMessage.content.find(
         (item: any) =>
           item.type === "image" ||
           (Array.isArray(item?.content) &&
@@ -72,7 +74,7 @@ export class ImageAgent implements IAgent {
     ) {
       req.body.model = config.Router.image;
       const images: any[] = [];
-      lastMessage.content
+      lastUserMessage.content
         .filter((item: any) => item.type === "tool_result")
         .forEach((item: any) => {
           if (Array.isArray(item.content)) {
@@ -84,7 +86,7 @@ export class ImageAgent implements IAgent {
             item.content = "read image successfully";
           }
         });
-      lastMessage.content.push(...images);
+      lastUserMessage.content.push(...images);
       return false;
     }
     return req.body.messages.some(
@@ -236,7 +238,10 @@ Always ensure that your response reflects a clear, accurate interpretation of th
         if (!agentResponse || !agentResponse.content) {
           return "analyzeImage Error";
         }
-        return agentResponse.content[0].text;
+        const textContent = agentResponse.content.find(
+          (item: any) => item.type === "text" && typeof item.text === "string"
+        );
+        return textContent?.text || "analyzeImage Error";
       },
     });
   }

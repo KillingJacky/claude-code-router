@@ -280,14 +280,36 @@ export interface RouterFallbackConfig {
   webSearch?: string[];
 }
 
+export const extractSessionId = (req: any): string | undefined => {
+  const sessionHeader = req.headers?.["x-claude-code-session-id"];
+  const headerValue = Array.isArray(sessionHeader)
+    ? sessionHeader[0]
+    : sessionHeader;
+  if (typeof headerValue === "string" && headerValue) {
+    return headerValue;
+  }
+
+  const userId = req.body?.metadata?.user_id;
+  if (typeof userId !== "string" || !userId) {
+    return undefined;
+  }
+
+  try {
+    const metadata = JSON.parse(userId);
+    if (typeof metadata.session_id === "string" && metadata.session_id) {
+      return metadata.session_id;
+    }
+  } catch {}
+
+  const parts = userId.split("_session_");
+  return parts.length > 1 ? parts[1] : undefined;
+};
+
 export const router = async (req: any, _res: any, context: RouterContext) => {
   const { configService, event } = context;
-  // Parse sessionId from metadata.user_id
-  if (req.body.metadata?.user_id) {
-    const parts = req.body.metadata.user_id.split("_session_");
-    if (parts.length > 1) {
-      req.sessionId = parts[1];
-    }
+  const sessionId = extractSessionId(req);
+  if (sessionId) {
+    req.sessionId = sessionId;
   }
   const lastMessageUsage = sessionUsageCache.get(req.sessionId);
   const { messages, system = [], tools }: MessageCreateParamsBase = req.body;
