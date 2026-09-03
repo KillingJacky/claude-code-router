@@ -195,12 +195,13 @@ Here is a comprehensive example:
     }
   ],
   "Router": {
-    "default": "deepseek,deepseek-chat",
-    "background": "ollama,qwen2.5-coder:latest",
-    "think": "deepseek,deepseek-reasoner",
-    "longContext": "openrouter,google/gemini-2.5-pro-preview",
-    "longContextThreshold": 60000,
-    "webSearch": "gemini,gemini-2.5-flash"
+    "primary": "deepseek,deepseek-chat",
+    "aliases": {
+      "haiku": "ollama,qwen2.5-coder:latest"
+    },
+    "capabilities": {
+      "webSearch": "gemini,gemini-2.5-flash"
+    }
   }
 }
 ```
@@ -243,7 +244,7 @@ ccr model
 This command provides an interactive interface to:
 
 - View current configuration:
-- See all configured models (default, background, think, longContext, webSearch, image)
+- See all configured primary, alias, and capability models
 - Switch models: Quickly change which model is used for each router type
 - Add new models: Add models to existing providers
 - Create new providers: Set up complete provider configurations including:
@@ -439,15 +440,15 @@ You can also create your own transformers and load them via the `transformers` f
 
 #### Router
 
-The `Router` object defines which model to use for different scenarios:
+The `Router` object uses explicit intent and model capabilities:
 
-- `default`: The default model for general tasks.
-- `background`: A model for background tasks. This can be a smaller, local model to save costs.
-- `think`: A model for reasoning-heavy tasks, like Plan Mode.
-- `longContext`: A model for handling long contexts (e.g., > 60K tokens).
-- `longContextThreshold` (optional): The token count threshold for triggering the long context model. Defaults to 60000 if not specified.
-- `webSearch`: Used for handling web search tasks and this requires the model itself to support the feature. If you're using openrouter, you need to add the `:online` suffix after the model name.
-- `image` (beta): Used for handling image-related tasks (supported by CCR’s built-in agent). If the model does not support tool calling, you need to set the `config.forceUseImageAgent` property to `true`.
+- `primary`: The general-purpose model. `default` remains a legacy synonym.
+- `aliases`: Maps Claude Code's `haiku`, `sonnet`, and `opus` model intents to provider models. `background` remains a legacy synonym for `aliases.haiku`.
+- `capabilities.webSearch`: A model for Anthropic web-search requests. `webSearch` remains a legacy synonym.
+- `capabilities.vision`: A vision-capable model for current user images. `image` remains a legacy synonym and CCR's image agent handles historical-image fallback.
+- `subagents`: Maps explicit `<CCR-ROUTE>profile</CCR-ROUTE>` tags in custom subagent system prompts to provider models.
+
+CCR does not route on `thinking` or estimated context length. Claude Code owns adaptive thinking, 200K/1M context selection, and compaction.
 
 - You can also switch models dynamically in Claude Code with the `/model` command:
 `/model provider_name,model_name`
@@ -494,14 +495,47 @@ module.exports = async function router(req, config) {
 
 ##### Subagent Routing
 
-For routing within subagents, you must specify a particular provider and model by including `<CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>` at the **beginning** of the subagent's prompt. This allows you to direct specific subagent tasks to designated models.
+Claude Code custom agents are Markdown files in `~/.claude/agents/` (or
+`.claude/agents/` in a project). Give each agent a native Claude model alias and
+an explicit CCR route profile in its prompt:
 
-**Example:**
+```markdown
+---
+name: ccr-explore
+description: Fast, read-only codebase exploration.
+model: haiku
+tools: Read, Glob, Grep
+---
 
+<CCR-ROUTE>explore</CCR-ROUTE>
+
+Explore the codebase and report concise, evidence-backed findings. Do not modify files.
 ```
-<CCR-SUBAGENT-MODEL>openrouter,anthropic/claude-3.5-sonnet</CCR-SUBAGENT-MODEL>
-Please help me analyze this code snippet for potential optimizations...
+
+Map the profile and give it its own fallback list. Profile fallbacks are
+intentional: `Fallback.subagents.explore` does not implicitly inherit the
+`haiku` alias fallback.
+
+```json
+{
+  "Router": {
+    "subagents": {
+      "explore": "groq,llama-3.3-70b-versatile"
+    }
+  },
+  "Fallback": {
+    "subagents": {
+      "explore": ["openrouter,meta-llama/llama-3.3-70b-instruct"]
+    }
+  }
+}
 ```
+
+Use the agent with `ccr code --agent ccr-explore`, or ask Claude Code to use
+the named agent. CCR removes the route tag before forwarding the request.
+
+`<CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>` remains available as
+a legacy per-prompt override; it takes precedence over a profile tag.
 
 ## Status Line (Beta)
 To better monitor the status of claude-code-router at runtime, version v1.0.40 includes a built-in statusline tool, which you can enable in the UI.

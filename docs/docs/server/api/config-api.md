@@ -31,7 +31,10 @@ curl http://localhost:3456/api/config \
     }
   ],
   "Router": {
-    "default": "openai,gpt-4"
+    "primary": "openai,gpt-4"
+  },
+  "Fallback": {
+    "primary": ["openai,gpt-4.1-mini"]
   },
   "transformers": [
     "anthropic"
@@ -61,7 +64,10 @@ curl -X POST http://localhost:3456/api/config \
       }
     ],
     "Router": {
-      "default": "openai,gpt-4"
+      "primary": "openai,gpt-4"
+    },
+    "Fallback": {
+      "primary": ["openai,gpt-4.1-mini"]
     }
   }'
 ```
@@ -105,18 +111,27 @@ curl -X POST http://localhost:3456/api/config \
 ```json
 {
   "Router": {
-    "default": "provider,model",
-    "longContextThreshold": 100000,
-    "routes": {
-      "background": "lightweight-model",
-      "think": "powerful-model",
-      "longContext": "long-context-model",
+    "primary": "provider,model",
+    "aliases": {
+      "haiku": "lightweight-model",
+      "sonnet": "capable-model",
+      "opus": "reasoning-model"
+    },
+    "capabilities": {
       "webSearch": "search-model",
-      "image": "vision-model"
+      "vision": "vision-model"
     }
   }
 }
 ```
+
+#### Fallback Configuration
+
+Use `Fallback.primary` for the `Router.primary` backup chain. Named aliases,
+capabilities, and subagent profiles use nested keys such as
+`Fallback.aliases.haiku`, `Fallback.capabilities.vision`, and
+`Fallback.subagents.explore`. Lowercase `fallback` and `fallback.default` are
+accepted for compatibility.
 
 #### Transformers Configuration
 

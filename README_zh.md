@@ -20,7 +20,7 @@
 
 ## ✨ 功能
 
--   **模型路由**: 根据您的需求将请求路由到不同的模型（例如，后台任务、思考、长上下文）。
+-   **模型路由**: 根据 Claude Code 的显式模型意图和请求能力将请求路由到不同模型。
 -   **多提供商支持**: 支持 OpenRouter、DeepSeek、Ollama、Gemini、Volcengine 和 SiliconFlow 等各种模型提供商。
 -   **请求/响应转换**: 使用转换器为不同的提供商自定义请求和响应。
 -   **动态模型切换**: 在 Claude Code 中使用 `/model` 命令动态切换模型。
@@ -58,7 +58,7 @@ npm install -g @musistudio/claude-code-router
 - **`HOST`** (可选): 您可以设置服务的主机地址。如果未设置 `APIKEY`，出于安全考虑，主机地址将强制设置为 `127.0.0.1`，以防止未经授权的访问。例如：`"HOST": "0.0.0.0"`。
 - **`NON_INTERACTIVE_MODE`** (可选): 当设置为 `true` 时，启用与非交互式环境（如 GitHub Actions、Docker 容器或其他 CI/CD 系统）的兼容性。这会设置适当的环境变量（`CI=true`、`FORCE_COLOR=0` 等）并配置 stdin 处理，以防止进程在自动化环境中挂起。例如：`"NON_INTERACTIVE_MODE": true`。
 - **`Providers`**: 用于配置不同的模型提供商。
-- **`Router`**: 用于设置路由规则。`default` 指定默认模型，如果未配置其他路由，则该模型将用于所有请求。
+- **`Router`**: 用于设置主模型、子代理模型别名和请求能力路由。
 - **`API_TIMEOUT_MS`**: API 请求超时时间，单位为毫秒。
 
 这是一个综合示例：
@@ -170,12 +170,13 @@ npm install -g @musistudio/claude-code-router
     }
   ],
   "Router": {
-    "default": "deepseek,deepseek-chat",
-    "background": "ollama,qwen2.5-coder:latest",
-    "think": "deepseek,deepseek-reasoner",
-    "longContext": "openrouter,google/gemini-2.5-pro-preview",
-    "longContextThreshold": 60000,
-    "webSearch": "gemini,gemini-2.5-flash"
+    "primary": "deepseek,deepseek-chat",
+    "aliases": {
+      "haiku": "ollama,qwen2.5-coder:latest"
+    },
+    "capabilities": {
+      "webSearch": "gemini,gemini-2.5-flash"
+    }
   }
 }
 ```
@@ -217,7 +218,7 @@ ccr model
 该命令提供交互式界面来：
 
 - 查看当前配置
-- 查看所有配置的模型（default、background、think、longContext、webSearch、image）
+- 查看所有配置的主模型、alias 和能力模型
 - 切换模型：快速更改每个路由器类型使用的模型
 - 添加新模型：向现有提供商添加模型
 - 创建新提供商：设置完整的提供商配置，包括：
@@ -411,15 +412,15 @@ Transformers 允许您修改请求和响应负载，以确保与不同提供商 
 
 #### Router
 
-`Router` 对象定义了在不同场景下使用哪个模型：
+`Router` 对象使用显式意图和模型能力：
 
--   `default`: 用于常规任务的默认模型。
--   `background`: 用于后台任务的模型。这可以是一个较小的本地模型以节省成本。
--   `think`: 用于推理密集型任务（如计划模式）的模型。
--   `longContext`: 用于处理长上下文（例如，> 60K 令牌）的模型。
--   `longContextThreshold` (可选): 触发长上下文模型的令牌数阈值。如果未指定，默认为 60000。
--   `webSearch`: 用于处理网络搜索任务，需要模型本身支持。如果使用`openrouter`需要在模型后面加上`:online`后缀。
--   `image`(测试版): 用于处理图片类任务（采用CCR内置的agent支持），如果该模型不支持工具调用，需要将`config.forceUseImageAgent`属性设置为`true`。
+-   `primary`: 通用主模型；`default` 仍是兼容写法。
+-   `aliases`: 将 Claude Code 的 `haiku`、`sonnet`、`opus` 模型意图映射到 provider 模型；`background` 仍兼容映射为 `aliases.haiku`。
+-   `capabilities.webSearch`: 用于 Anthropic web search 请求的模型；`webSearch` 是兼容写法。
+-   `capabilities.vision`: 当前用户图片使用的视觉模型；`image` 是兼容写法，CCR Image Agent 继续为历史图片兜底。
+-   `subagents`: 将自定义子代理 system prompt 中的 `<CCR-ROUTE>profile</CCR-ROUTE>` 映射到 provider 模型。
+
+CCR 不再依据 `thinking` 或估算上下文长度改路由；adaptive thinking、200K/1M 上下文与 compact 均由 Claude Code 管理。
 
 您还可以使用 `/model` 命令在 Claude Code 中动态切换模型：
 `/model provider_name,model_name`
@@ -466,14 +467,47 @@ module.exports = async function router(req, config) {
 
 ##### 子代理路由
 
-对于子代理内的路由，您必须在子代理提示词的**开头**包含 `<CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>` 来指定特定的提供商和模型。这样可以将特定的子代理任务定向到指定的模型。
+Claude Code 的自定义 agent 是位于 `~/.claude/agents/`（或项目
+`.claude/agents/`）中的 Markdown 文件。为 agent 指定 Claude Code 原生模型
+alias，并在提示词中加入明确的 CCR profile 标签：
 
-**示例：**
+```markdown
+---
+name: ccr-explore
+description: 快速、只读地探索代码库。
+model: haiku
+tools: Read, Glob, Grep
+---
 
+<CCR-ROUTE>explore</CCR-ROUTE>
+
+高效探索代码库并给出简洁、有证据支撑的结论。不要修改文件。
 ```
-<CCR-SUBAGENT-MODEL>openrouter,anthropic/claude-3.5-sonnet</CCR-SUBAGENT-MODEL>
-请帮我分析这段代码是否存在潜在的优化空间...
+
+在 CCR 中映射该 profile，并为它单独配置 Fallback。Profile 的 Fallback 不会
+自动继承 `haiku` alias 的 fallback，因此应显式配置
+`Fallback.subagents.explore`：
+
+```json
+{
+  "Router": {
+    "subagents": {
+      "explore": "groq,llama-3.3-70b-versatile"
+    }
+  },
+  "Fallback": {
+    "subagents": {
+      "explore": ["openrouter,meta-llama/llama-3.3-70b-instruct"]
+    }
+  }
+}
 ```
+
+使用 `ccr code --agent ccr-explore` 启动该 agent，或在 Claude Code 中要求使用
+指定的 agent。CCR 会在转发请求前移除路由标签。
+
+旧的 `<CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>` 仍可作为单次
+提示词的显式覆盖，且优先级高于 profile 标签。
 
 ## Status Line (Beta)
 为了在运行时更好的查看claude-code-router的状态，claude-code-router在v1.0.40内置了一个statusline工具，你可以在UI中启用它，

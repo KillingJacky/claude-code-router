@@ -1,5 +1,4 @@
 import { get_encoding } from "tiktoken";
-import { sessionUsageCache, Usage } from "./cache";
 import { readFile, appendFile } from "fs/promises";
 import { opendir, stat } from "fs/promises";
 import { join } from "path";
@@ -107,13 +106,13 @@ const getProjectSpecificRouter = async (
       try {
         const sessionConfig = JSON.parse(await readFile(sessionConfigPath, "utf8"));
         if (sessionConfig && sessionConfig.Router) {
-          return sessionConfig.Router;
+          return { router: sessionConfig.Router, source: "session" as const };
         }
       } catch {}
       try {
         const projectConfig = JSON.parse(await readFile(projectConfigPath, "utf8"));
         if (projectConfig && projectConfig.Router) {
-          return projectConfig.Router;
+          return { router: projectConfig.Router, source: "project" as const };
         }
       } catch {}
     }
@@ -121,15 +120,145 @@ const getProjectSpecificRouter = async (
   return undefined; // Return undefined to use original configuration
 };
 
-const getUseModel = async (
+const getVisionModel = (router: any): string | undefined =>
+  router?.capabilities?.vision || router?.image;
+
+const getWebSearchModel = (router: any): string | undefined =>
+  router?.capabilities?.webSearch || router?.webSearch;
+
+const getPrimaryModel = (router: any): string | undefined =>
+  router?.primary || router?.default;
+
+export type RouterModelAlias =
+  | "haiku"
+  | "sonnet"
+  | "opus";
+
+export interface RouterRouteDecision {
+  model: string | undefined;
+  scenarioType: RouterScenarioType;
+  fallbackKey: string;
+}
+
+type RouterSource = "explicit" | "global" | "project" | "session";
+type RouterRouteDecisionWithSource = RouterRouteDecision & {
+  routerSource: RouterSource;
+};
+
+const getModelAlias = (model: unknown): RouterModelAlias | undefined => {
+  if (typeof model !== "string") return undefined;
+  const normalized = model.toLowerCase();
+
+  if (normalized.includes("haiku")) return "haiku";
+  if (normalized.includes("sonnet")) return "sonnet";
+  if (normalized.includes("opus")) return "opus";
+  return undefined;
+};
+
+const getAliasModel = (router: any, alias: RouterModelAlias): string | undefined => {
+  if (router?.aliases?.[alias]) return router.aliases[alias];
+  return alias === "haiku" ? router?.background : undefined;
+};
+
+const extractRouteTag = (req: any, tagName: string): string | undefined => {
+  const contentPattern = tagName === "CCR-SUBAGENT-MODEL" ? "([^<]+)" : "([\\w.-]+)";
+  const tag = new RegExp(`<${tagName}>${contentPattern}<\\/${tagName}>`);
+  const system = req.body?.system;
+  if (!Array.isArray(system)) return undefined;
+
+  for (const block of system) {
+    if (typeof block?.text !== "string") continue;
+    const match = block.text.match(tag);
+    if (!match) continue;
+    block.text = block.text.replace(tag, "");
+    return match[1].trim();
+  }
+  return undefined;
+};
+
+const hasCurrentUserImage = (messages: any): boolean => {
+  if (!Array.isArray(messages)) return false;
+  const lastUserMessage = [...messages]
+    .reverse()
+    .find((message: any) => message.role === "user");
+  return Array.isArray(lastUserMessage?.content) && lastUserMessage.content.some(
+    (item: any) =>
+      item.type === "image" ||
+      (Array.isArray(item?.content) &&
+        item.content.some((part: any) => part.type === "image"))
+  );
+};
+
+export const resolveRouterRoute = (
   req: any,
-  tokenCount: number,
-  configService: ConfigService,
-  lastUsage?: Usage | undefined
-): Promise<{ model: string; scenarioType: RouterScenarioType }> => {
+  router: any,
+  forceUseImageAgent = false
+): RouterRouteDecision => {
+  const explicitModel = extractRouteTag(req, "CCR-SUBAGENT-MODEL");
+  if (explicitModel) {
+    return {
+      model: explicitModel,
+      scenarioType: "subagent",
+      fallbackKey: "subagent",
+    };
+  }
+
+  const profile = extractRouteTag(req, "CCR-ROUTE");
+  if (profile && router?.subagents?.[profile]) {
+    return {
+      model: router.subagents[profile],
+      scenarioType: "subagent",
+      fallbackKey: `subagents.${profile}`,
+    };
+  }
+
+  const visionModel = getVisionModel(router);
+  if (!forceUseImageAgent && visionModel && hasCurrentUserImage(req.body?.messages)) {
+    return {
+      model: visionModel,
+      scenarioType: "image",
+      fallbackKey: "capabilities.vision",
+    };
+  }
+
+  const webSearchModel = getWebSearchModel(router);
+  if (
+    webSearchModel &&
+    Array.isArray(req.body?.tools) &&
+    req.body.tools.some((tool: any) => tool.type?.startsWith("web_search"))
+  ) {
+    return {
+      model: webSearchModel,
+      scenarioType: "webSearch",
+      fallbackKey: "capabilities.webSearch",
+    };
+  }
+
+  const alias = getModelAlias(req.body?.model);
+  const aliasModel = alias && getAliasModel(router, alias);
+  if (aliasModel) {
+    return {
+      model: aliasModel,
+      scenarioType: "alias",
+      fallbackKey: `aliases.${alias}`,
+    };
+  }
+
+  return {
+    model: getPrimaryModel(router),
+    scenarioType: "default",
+    fallbackKey: "default",
+  };
+};
+
+export const getUseModel = async (
+  req: any,
+  configService: ConfigService
+): Promise<RouterRouteDecisionWithSource> => {
   const projectSpecificRouter = await getProjectSpecificRouter(req, configService);
   const providers = configService.get<any[]>("providers") || [];
-  const Router = projectSpecificRouter || configService.get("Router");
+  const Router = projectSpecificRouter?.router || configService.get("Router");
+  const routerSource = projectSpecificRouter?.source || "global";
 
   if (req.body.model.includes(",")) {
     const [provider, model] = req.body.model.split(",");
@@ -140,63 +269,25 @@ const getUseModel = async (
       (m: any) => m.toLowerCase() === model
     );
     if (finalProvider && finalModel) {
-      return { model: `${finalProvider.name},${finalModel}`, scenarioType: 'default' };
+      return {
+        model: `${finalProvider.name},${finalModel}`,
+        scenarioType: 'default',
+        fallbackKey: 'default',
+        routerSource: 'explicit',
+      };
     }
-    return { model: req.body.model, scenarioType: 'default' };
+    return {
+      model: req.body.model,
+      scenarioType: 'default',
+      fallbackKey: 'default',
+      routerSource: 'explicit',
+    };
   }
 
-  // if tokenCount is greater than the configured threshold, use the long context model
-  const longContextThreshold = Router?.longContextThreshold || 60000;
-  const lastUsageThreshold =
-    lastUsage &&
-    lastUsage.input_tokens > longContextThreshold &&
-    tokenCount > 20000;
-  const tokenCountThreshold = tokenCount > longContextThreshold;
-  if ((lastUsageThreshold || tokenCountThreshold) && Router?.longContext) {
-    req.log.info(
-      `Using long context model due to token count: ${tokenCount}, threshold: ${longContextThreshold}`
-    );
-    return { model: Router.longContext, scenarioType: 'longContext' };
-  }
-  if (
-    req.body?.system?.length > 1 &&
-    req.body?.system[1]?.text?.startsWith("<CCR-SUBAGENT-MODEL>")
-  ) {
-    const model = req.body?.system[1].text.match(
-      /<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s
-    );
-    if (model) {
-      req.body.system[1].text = req.body.system[1].text.replace(
-        `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
-        ""
-      );
-      return { model: model[1], scenarioType: 'default' };
-    }
-  }
-  // Use the background model for any Claude Haiku variant
-  const globalRouter = configService.get("Router");
-  if (
-    req.body.model?.includes("claude") &&
-    req.body.model?.includes("haiku") &&
-    globalRouter?.background
-  ) {
-    req.log.info(`Using background model for ${req.body.model}`);
-    return { model: globalRouter.background, scenarioType: 'background' };
-  }
-  // The priority of websearch must be higher than thinking.
-  if (
-    Array.isArray(req.body.tools) &&
-    req.body.tools.some((tool: any) => tool.type?.startsWith("web_search")) &&
-    Router?.webSearch
-  ) {
-    return { model: Router.webSearch, scenarioType: 'webSearch' };
-  }
-  // if exits thinking, use the think model
-  if (req.body.thinking && Router?.think) {
-    req.log.info(`Using think model for ${req.body.thinking}`);
-    return { model: Router.think, scenarioType: 'think' };
-  }
-  return { model: Router?.default, scenarioType: 'default' };
+  return {
+    ...resolveRouterRoute(req, Router, configService.get("forceUseImageAgent")),
+    routerSource,
+  };
 };
 
 function getLastUserMessageText(messages: MessageParam[]): string {
@@ -248,15 +339,41 @@ function getTransformerNames(model: string, configService: ConfigService): strin
   return names;
 }
 
-async function writeRouteLog(req: any, model: string, configService: ConfigService): Promise<void> {
+const MAX_ROUTE_LOG_MESSAGE_LENGTH = 1000;
+
+interface RouteLogDetails {
+  event?: "route_selected" | "route_error" | "fallback_attempt" | "fallback_succeeded" | "fallback_failed";
+  fallbackIndex?: number;
+  fallbackTotal?: number;
+  errorCode?: string;
+  statusCode?: number;
+}
+
+export async function writeRouteLog(
+  req: any,
+  model: string | undefined,
+  configService: ConfigService,
+  details: RouteLogDetails = {}
+): Promise<void> {
   try {
+    const msg = getLastUserMessageText(req.body?.messages || []);
     const entry = {
-      time: new Date().toLocaleString(),
+      time: new Date().toISOString(),
+      event: details.event || "route_selected",
       reqId: req.id,
-      msg: getLastUserMessageText(req.body?.messages || []),
+      msg: Array.from(msg).slice(-MAX_ROUTE_LOG_MESSAGE_LENGTH).join(""),
+      requestedModel: req.requestedModel,
+      tokenCount: req.tokenCount,
       route: req.scenarioType || 'default',
+      routeFallbackKey: req.routeFallbackKey,
+      routerSource: req.routerSource,
       model,
-      transformers: getTransformerNames(model, configService),
+      selectedModel: req.routedModel,
+      fallbackIndex: details.fallbackIndex,
+      fallbackTotal: details.fallbackTotal,
+      errorCode: details.errorCode,
+      statusCode: details.statusCode,
+      transformers: getTransformerNames(model || "", configService),
     };
     await appendFile(join(HOME_DIR, 'route.log'), JSON.stringify(entry) + '\n');
   } catch {
@@ -270,14 +387,24 @@ export interface RouterContext {
   event?: any;
 }
 
-export type RouterScenarioType = 'default' | 'background' | 'think' | 'longContext' | 'webSearch';
+export type RouterScenarioType = 'default' | 'alias' | 'subagent' | 'image' | 'webSearch';
 
 export interface RouterFallbackConfig {
+  primary?: string[];
   default?: string[];
+  alias?: string[];
+  subagent?: string[];
+  image?: string[];
+  webSearch?: string[];
+  aliases?: Partial<Record<RouterModelAlias, string[]>>;
+  capabilities?: {
+    webSearch?: string[];
+    vision?: string[];
+  };
+  subagents?: Record<string, string[]>;
   background?: string[];
   think?: string[];
   longContext?: string[];
-  webSearch?: string[];
 }
 
 export const extractSessionId = (req: any): string | undefined => {
@@ -311,8 +438,8 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
   if (sessionId) {
     req.sessionId = sessionId;
   }
-  const lastMessageUsage = sessionUsageCache.get(req.sessionId);
   const { messages, system = [], tools }: MessageCreateParamsBase = req.body;
+  req.requestedModel = req.body?.model;
   const rewritePrompt = configService.get("REWRITE_SYSTEM_PROMPT");
   if (
     rewritePrompt &&
@@ -352,13 +479,13 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
         tools as Tool[]
       );
     }
+    req.tokenCount = tokenCount;
 
     let model;
     const customRouterPath = configService.get("CUSTOM_ROUTER_PATH");
     if (customRouterPath) {
       try {
         const customRouter = require(customRouterPath);
-        req.tokenCount = tokenCount; // Pass token count to custom router
         model = await customRouter(req, configService.getAll(), {
           event,
         });
@@ -367,21 +494,33 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
       }
     }
     if (!model) {
-      const result = await getUseModel(req, tokenCount, configService, lastMessageUsage);
+      const result = await getUseModel(req, configService);
       model = result.model;
       req.scenarioType = result.scenarioType;
+      req.routeFallbackKey = result.fallbackKey;
+      req.routerSource = result.routerSource;
     } else {
       // Custom router doesn't provide scenario type, default to 'default'
       req.scenarioType = 'default';
+      req.routeFallbackKey = 'default';
+      req.routerSource = 'custom';
     }
     req.body.model = model;
+    req.routedModel = model;
     await writeRouteLog(req, model, configService);
   } catch (error: any) {
     req.log.error(`Error in router middleware: ${error.message}`);
     const Router = configService.get("Router");
-    req.body.model = Router?.default;
+    req.body.model = getPrimaryModel(Router);
     req.scenarioType = 'default';
-    await writeRouteLog(req, req.body.model, configService);
+    req.routeFallbackKey = 'default';
+    req.routerSource = 'error_fallback';
+    req.routedModel = req.body.model;
+    await writeRouteLog(req, req.body.model, configService, {
+      event: 'route_error',
+      errorCode: error.code,
+      statusCode: error.statusCode,
+    });
   }
   return;
 };

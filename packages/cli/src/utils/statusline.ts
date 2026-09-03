@@ -691,9 +691,10 @@ export async function parseStatusLineData(input: StatusLineInput, presetName?: s
                 const configContent = await fs.readFile(configPath, "utf-8");
                 const config = JSON5.parse(configContent);
 
-                // Get model name from Router field's default content
-                if (config.Router && config.Router.default) {
-                    const [, defaultModel] = config.Router.default.split(",");
+                // Get model name from Router primary model, with legacy fallback.
+                const primaryModel = config.Router?.primary || config.Router?.default;
+                if (primaryModel) {
+                    const [, defaultModel] = primaryModel.split(",");
                     if (defaultModel) {
                         model = defaultModel.trim();
                     }

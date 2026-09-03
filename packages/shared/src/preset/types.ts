@@ -106,6 +106,18 @@ export interface ProviderConfig {
 
 // Router configuration
 export interface RouterConfig {
+  primary?: string;
+  aliases?: {
+    haiku?: string;
+    sonnet?: string;
+    opus?: string;
+  };
+  subagents?: Record<string, string>;
+  capabilities?: {
+    webSearch?: string;
+    vision?: string;
+  };
+  // Legacy fields retained for backwards compatibility.
   default?: string;
   background?: string;
   think?: string;
@@ -113,7 +125,7 @@ export interface RouterConfig {
   longContextThreshold?: number;
   webSearch?: string;
   image?: string;
-  [key: string]: string | number | undefined;
+  [key: string]: unknown;
 }
 
 // Transformer configuration

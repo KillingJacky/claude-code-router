@@ -46,6 +46,9 @@ class ImageCache {
 
 const imageCache = new ImageCache();
 
+const getVisionModel = (config: any): string | undefined =>
+  config.Router?.capabilities?.vision || config.Router?.image;
+
 export class ImageAgent implements IAgent {
   name = "image";
   tools: Map<string, ITool>;
@@ -56,7 +59,8 @@ export class ImageAgent implements IAgent {
   }
 
   shouldHandle(req: any, config: any): boolean {
-    if (!config.Router.image || req.body.model === config.Router.image)
+    const visionModel = getVisionModel(config);
+    if (!visionModel || req.body.model === visionModel)
       return false;
     const lastUserMessage = [...req.body.messages]
       .reverse()
@@ -72,7 +76,7 @@ export class ImageAgent implements IAgent {
             item.content.some((sub: any) => sub.type === "image"))
       )
     ) {
-      req.body.model = config.Router.image;
+      req.body.model = visionModel;
       const images: any[] = [];
       lastUserMessage.content
         .filter((item: any) => item.type === "tool_result")
@@ -211,7 +215,7 @@ export class ImageAgent implements IAgent {
               "content-type": "application/json",
             },
             body: JSON.stringify({
-              model: context.config.Router.image,
+              model: getVisionModel(context.config),
               system: [
                 {
                   type: "text",

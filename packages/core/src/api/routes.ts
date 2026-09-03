@@ -12,6 +12,7 @@ import { ConfigService } from "@/services/config";
 import { ProviderService } from "@/services/provider";
 import { TransformerService } from "@/services/transformer";
 import { Transformer } from "@/types/transformer";
+import { writeRouteLog } from "@/utils/router";
 
 // Extend FastifyInstance to include custom services
 declare module "fastify" {
@@ -113,13 +114,26 @@ async function handleFallback(
   error: any
 ): Promise<any> {
   const scenarioType = (req as any).scenarioType || 'default';
-  const fallbackConfig = fastify.configService.get<any>('fallback');
+  const fallbackConfig = fastify.configService.get<any>('Fallback')
+    ?? fastify.configService.get<any>('fallback');
+  const fallbackKey = (req as any).routeFallbackKey;
+  const primaryFallback = scenarioType === 'default'
+    ? fallbackConfig?.primary
+    : undefined;
+  const nestedFallback = typeof fallbackKey === 'string'
+    ? fallbackKey.split('.').reduce((value: any, key: string) => value?.[key], fallbackConfig)
+    : undefined;
+  const legacyFallback = scenarioType === 'alias'
+    ? fallbackConfig?.background
+    : scenarioType === 'image'
+      ? fallbackConfig?.image
+      : fallbackConfig?.[scenarioType];
+  const fallbackList = primaryFallback || nestedFallback || fallbackConfig?.[scenarioType] || legacyFallback;
 
-  if (!fallbackConfig || !fallbackConfig[scenarioType]) {
+  if (!fallbackList) {
     return null;
   }
 
-  const fallbackList = fallbackConfig[scenarioType] as string[];
   if (!Array.isArray(fallbackList) || fallbackList.length === 0) {
     return null;
   }
@@ -127,9 +141,14 @@ async function handleFallback(
   req.log.warn(`Request failed for ${(req as any).scenarioType}, trying ${fallbackList.length} fallback models`);
 
   // Try each fallback model in sequence
-  for (const fallbackModel of fallbackList) {
+  for (const [index, fallbackModel] of fallbackList.entries()) {
     try {
       req.log.info(`Trying fallback model: ${fallbackModel}`);
+      await writeRouteLog(req, fallbackModel, fastify.configService, {
+        event: 'fallback_attempt',
+        fallbackIndex: index + 1,
+        fallbackTotal: fallbackList.length,
+      });
 
       // Update request with fallback model
       const newBody = { ...(req.body as any) };
@@ -180,11 +199,23 @@ async function handleFallback(
       );
 
       req.log.info(`Fallback model ${fallbackModel} succeeded`);
+      await writeRouteLog(req, fallbackModel, fastify.configService, {
+        event: 'fallback_succeeded',
+        fallbackIndex: index + 1,
+        fallbackTotal: fallbackList.length,
+      });
 
       // Format and return response
       return formatResponse(finalResponse, reply, newBody);
     } catch (fallbackError: any) {
       req.log.warn(`Fallback model ${fallbackModel} failed: ${fallbackError.message}`);
+      await writeRouteLog(req, fallbackModel, fastify.configService, {
+        event: 'fallback_failed',
+        fallbackIndex: index + 1,
+        fallbackTotal: fallbackList.length,
+        errorCode: fallbackError.code,
+        statusCode: fallbackError.statusCode,
+      });
       continue;
     }
   }

@@ -26,14 +26,26 @@ interface Provider {
 }
 
 interface RouterConfig {
-  default: string;
+  primary?: string;
+  aliases?: {
+    haiku?: string;
+    sonnet?: string;
+    opus?: string;
+  };
+  capabilities?: {
+    webSearch?: string;
+    vision?: string;
+  };
+  subagents?: Record<string, string>;
+  // Legacy fields retained for existing configurations.
+  default?: string;
   background?: string;
   think?: string;
   longContext?: string;
   longContextThreshold?: number;
   webSearch?: string;
   image?: string;
-  [key: string]: string | number | undefined;
+  [key: string]: unknown;
 }
 
 interface Config {
@@ -118,32 +130,23 @@ function displayCurrentConfig(config: Config): void {
     return `${YELLOW}${provider}${RESET} | ${model}\n  ${DIM}- ${routerValue}${RESET}`;
   };
   
-  console.log(`${BOLDCYAN}Default Model:${RESET}`);
-  console.log(`  ${formatModel(config.Router.default)}\n`);
-  
-  if (config.Router.background) {
-    console.log(`${BOLDCYAN}Background Model:${RESET}`);
-    console.log(`  ${formatModel(config.Router.background)}\n`);
-  }
-  
-  if (config.Router.think) {
-    console.log(`${BOLDCYAN}Think Model:${RESET}`);
-    console.log(`  ${formatModel(config.Router.think)}\n`);
-  }
-  
-  if (config.Router.longContext) {
-    console.log(`${BOLDCYAN}Long Context Model:${RESET}`);
-    console.log(`  ${formatModel(config.Router.longContext)}\n`);
-  }
-  
-  if (config.Router.webSearch) {
-    console.log(`${BOLDCYAN}Web Search Model:${RESET}`);
-    console.log(`  ${formatModel(config.Router.webSearch)}\n`);
-  }
-  
-  if (config.Router.image) {
-    console.log(`${BOLDCYAN}Image Model:${RESET}`);
-    console.log(`  ${formatModel(config.Router.image)}\n`);
+  console.log(`${BOLDCYAN}Primary Model:${RESET}`);
+  console.log(`  ${formatModel(config.Router.primary || config.Router.default)}\n`);
+
+  const aliases = config.Router.aliases || {};
+  const capabilities = config.Router.capabilities || {};
+  const entries: Array<[string, string | undefined]> = [
+    ['Haiku Alias', aliases.haiku || config.Router.background],
+    ['Sonnet Alias', aliases.sonnet],
+    ['Opus Alias', aliases.opus],
+    ['Web Search Capability', capabilities.webSearch || config.Router.webSearch],
+    ['Vision Capability', capabilities.vision || config.Router.image],
+  ];
+  for (const [label, model] of entries) {
+    if (model) {
+      console.log(`${BOLDCYAN}${label}:${RESET}`);
+      console.log(`  ${formatModel(model)}\n`);
+    }
   }
   
   console.log(`\n${BOLDCYAN}═══════════════════════════════════════════════${RESET}`);
@@ -155,12 +158,12 @@ async function selectModelType() {
   return await select({
     message: `${BOLDYELLOW}Which model configuration do you want to update?${RESET}`,
     choices: [
-      { name: 'Default Model', value: 'default' },
-      { name: 'Background Model', value: 'background' },
-      { name: 'Think Model', value: 'think' },
-      { name: 'Long Context Model', value: 'longContext' },
-      { name: 'Web Search Model', value: 'webSearch' },
-      { name: 'Image Model', value: 'image' },
+      { name: 'Primary Model', value: 'primary' },
+      { name: 'Haiku Alias', value: 'aliases.haiku' },
+      { name: 'Sonnet Alias', value: 'aliases.sonnet' },
+      { name: 'Opus Alias', value: 'aliases.opus' },
+      { name: 'Web Search Capability', value: 'capabilities.webSearch' },
+      { name: 'Vision Capability', value: 'capabilities.vision' },
       { name: `${BOLDGREEN}+ Add New Model${RESET}`, value: 'addModel' }
     ]
   });
@@ -174,6 +177,23 @@ async function selectModel(config: Config, modelType: string) {
     choices: models,
     pageSize: 15
   });
+}
+
+function setRouterModel(config: Config, target: string, model: string): void {
+  const [group, key] = target.split('.');
+  if (!key) {
+    config.Router[group] = model;
+    return;
+  }
+  if (group === 'aliases') {
+    config.Router.aliases = config.Router.aliases || {};
+    config.Router.aliases[key as keyof NonNullable<RouterConfig['aliases']>] = model;
+    return;
+  }
+  if (group === 'capabilities') {
+    config.Router.capabilities = config.Router.capabilities || {};
+    config.Router.capabilities[key as keyof NonNullable<RouterConfig['capabilities']>] = model;
+  }
 }
 
 async function configureTransformers(): Promise<TransformerConfig | undefined> {
@@ -309,12 +329,12 @@ async function addModelToExistingProvider(config: Config, providerName: string):
     const modelType = await select({
       message: `\n${BOLDYELLOW}Select configuration type:${RESET}`,
       choices: [
-        { name: 'Default Model', value: 'default' },
-        { name: 'Background Model', value: 'background' },
-        { name: 'Think Model', value: 'think' },
-        { name: 'Long Context Model', value: 'longContext' },
-        { name: 'Web Search Model', value: 'webSearch' },
-        { name: 'Image Model', value: 'image' }
+        { name: 'Primary Model', value: 'primary' },
+        { name: 'Haiku Alias', value: 'aliases.haiku' },
+        { name: 'Sonnet Alias', value: 'aliases.sonnet' },
+        { name: 'Opus Alias', value: 'aliases.opus' },
+        { name: 'Web Search Capability', value: 'capabilities.webSearch' },
+        { name: 'Vision Capability', value: 'capabilities.vision' }
       ]
     }) as string;
     
@@ -413,12 +433,12 @@ async function addNewProvider(config: Config): Promise<ModelResult | null> {
     const modelType = await select({
       message: `\n${BOLDYELLOW}Select configuration type:${RESET}`,
       choices: [
-        { name: 'Default Model', value: 'default' },
-        { name: 'Background Model', value: 'background' },
-        { name: 'Think Model', value: 'think' },
-        { name: 'Long Context Model', value: 'longContext' },
-        { name: 'Web Search Model', value: 'webSearch' },
-        { name: 'Image Model', value: 'image' }
+        { name: 'Primary Model', value: 'primary' },
+        { name: 'Haiku Alias', value: 'aliases.haiku' },
+        { name: 'Sonnet Alias', value: 'aliases.sonnet' },
+        { name: 'Opus Alias', value: 'aliases.opus' },
+        { name: 'Web Search Capability', value: 'capabilities.webSearch' },
+        { name: 'Vision Capability', value: 'capabilities.vision' }
       ]
     }) as string;
     
@@ -442,13 +462,13 @@ export async function runModelSelector(): Promise<void> {
       
       if (result) {
         config = loadConfig();
-        config.Router[result.modelType] = `${result.providerName},${result.modelName}`;
+        setRouterModel(config, result.modelType, `${result.providerName},${result.modelName}`);
         saveConfig(config);
         console.log(`${GREEN}✓ ${result.modelType} set to ${result.providerName},${result.modelName}${RESET}`);
       }
     } else {
       const selectedModel = await selectModel(config, action) as string;
-      config.Router[action] = selectedModel;
+      setRouterModel(config, action, selectedModel);
       saveConfig(config);
       
       console.log(`${GREEN}✓ ${action} model updated to: ${selectedModel}${RESET}`);

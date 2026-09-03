@@ -46,7 +46,10 @@ Configure which model to use by default:
 ```json
 {
   "Router": {
-    "default": "deepseek,deepseek-chat"
+    "primary": "deepseek,deepseek-chat"
+  },
+  "Fallback": {
+    "primary": ["groq,llama-3.3-70b-versatile"]
   }
 }
 ```
@@ -108,9 +111,10 @@ Both `$VAR_NAME` and `${VAR_NAME}` syntax are supported.
     }
   ],
   "Router": {
-    "default": "deepseek,deepseek-chat",
-    "longContextThreshold": 100000,
-    "background": "groq,llama-3.3-70b-versatile"
+    "primary": "deepseek,deepseek-chat",
+    "aliases": {
+      "haiku": "groq,llama-3.3-70b-versatile"
+    }
   },
   "transformers": [
     {

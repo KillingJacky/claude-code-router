@@ -6,80 +6,128 @@ sidebar_position: 3
 
 Configure how requests are routed to different models.
 
-## Default Routing
+## Primary Routing
 
-Set the default model for all requests:
-
-```json
-{
-  "Router": {
-    "default": "deepseek,deepseek-chat"
-  }
-}
-```
-
-## Built-in Scenarios
-
-### Background Tasks
-
-Route background tasks to a lightweight model:
+Set the primary model for requests that do not require a capability or explicit
+subagent route:
 
 ```json
 {
   "Router": {
-    "background": "groq,llama-3.3-70b-versatile"
+    "primary": "deepseek,deepseek-chat"
   }
 }
 ```
 
-### Thinking Mode (Plan Mode)
+`default` remains supported as a legacy synonym for `primary`.
 
-Route thinking-intensive tasks to a more capable model:
+## Model Aliases
+
+Claude Code subagents can explicitly select `haiku`, `sonnet`, or `opus`.
+Map those model intents to providers that fit your deployment:
 
 ```json
 {
   "Router": {
-    "think": "deepseek,deepseek-chat"
+    "primary": "deepseek,deepseek-chat",
+    "aliases": {
+      "haiku": "groq,llama-3.3-70b-versatile",
+      "sonnet": "deepseek,deepseek-chat",
+      "opus": "openrouter,anthropic/claude-sonnet-4"
+    }
   }
 }
 ```
 
-### Long Context
+The `[1m]` variant is managed by Claude Code's context policy. CCR treats
+`sonnet` and `sonnet[1m]` as the same alias and never switches models based on
+an estimated token count. `background` remains supported as a legacy synonym
+for `aliases.haiku`.
 
-Route requests with long context:
-
-```json
-{
-  "Router": {
-    "longContextThreshold": 100000,
-    "longContext": "gemini,gemini-1.5-pro"
-  }
-}
-```
+## Capability Routing
 
 ### Web Search
 
-Route web search tasks:
+Route requests that declare an Anthropic web search tool to a model that
+supports web search:
 
 ```json
 {
   "Router": {
-    "webSearch": "deepseek,deepseek-chat"
+    "capabilities": {
+      "webSearch": "deepseek,deepseek-chat"
+    }
   }
 }
 ```
 
-### Image Tasks
+### Vision
 
-Route image-related tasks:
+Route a current user image to a vision-capable model. CCR keeps its image agent
+as a fallback for images in earlier conversation turns.
 
 ```json
 {
   "Router": {
-    "image": "gemini,gemini-1.5-pro"
+    "capabilities": {
+      "vision": "gemini,gemini-1.5-pro"
+    }
   }
 }
 ```
+
+Legacy `webSearch` and `image` fields remain supported as synonyms for these
+capabilities.
+
+## Subagent Profiles
+
+For a custom Claude Code agent, put an explicit route tag in its system prompt:
+
+```text
+<CCR-ROUTE>explore</CCR-ROUTE>
+```
+
+For example, create `~/.claude/agents/ccr-explore.md` (or a project-local
+`.claude/agents/ccr-explore.md`):
+
+```markdown
+---
+name: ccr-explore
+description: Fast, read-only codebase exploration.
+model: haiku
+tools: Read, Glob, Grep
+---
+
+<CCR-ROUTE>explore</CCR-ROUTE>
+
+Explore the codebase and report concise findings. Do not modify files.
+```
+
+Then map that profile in CCR:
+
+```json
+{
+  "Router": {
+    "subagents": {
+      "explore": "groq,llama-3.3-70b-versatile"
+    }
+  },
+  "Fallback": {
+    "subagents": {
+      "explore": ["openrouter,meta-llama/llama-3.3-70b-instruct"]
+    }
+  }
+}
+```
+
+Start it with `ccr code --agent ccr-explore`, or ask Claude Code to use the
+named agent. CCR removes the tag before forwarding the request.
+
+Each named profile needs its own fallback list at
+`Fallback.subagents.<profile>`; it does not inherit the fallback of the
+agent's `haiku`, `sonnet`, or `opus` alias. An explicit legacy
+`<CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>` tag is also supported
+and takes precedence over a profile tag.
 
 ## Fallback
 
@@ -90,30 +138,30 @@ When a request fails, you can configure a list of backup models. The system will
 ```json
 {
   "Router": {
-    "default": "deepseek,deepseek-chat",
-    "background": "ollama,qwen2.5-coder:latest",
-    "think": "deepseek,deepseek-reasoner",
-    "longContext": "openrouter,google/gemini-2.5-pro-preview",
-    "longContextThreshold": 60000,
-    "webSearch": "gemini,gemini-2.5-flash"
+    "primary": "deepseek,deepseek-chat",
+    "aliases": {
+      "haiku": "ollama,qwen2.5-coder:latest"
+    },
+    "capabilities": {
+      "webSearch": "gemini,gemini-2.5-flash"
+    }
   },
-  "fallback": {
-    "default": [
+  "Fallback": {
+    "primary": [
       "aihubmix,Z/glm-4.5",
       "openrouter,anthropic/claude-sonnet-4"
     ],
-    "background": [
-      "ollama,qwen2.5-coder:latest"
-    ],
-    "think": [
-      "openrouter,anthropic/claude-3.7-sonnet:thinking"
-    ],
-    "longContext": [
-      "modelscope,Qwen/Qwen3-Coder-480B-A35B-Instruct"
-    ],
-    "webSearch": [
-      "openrouter,anthropic/claude-sonnet-4"
-    ]
+    "aliases": {
+      "haiku": ["ollama,qwen2.5-coder:latest"],
+      "sonnet": ["openrouter,anthropic/claude-sonnet-4"]
+    },
+    "capabilities": {
+      "webSearch": ["openrouter,anthropic/claude-sonnet-4"],
+      "vision": ["gemini,gemini-2.5-pro"]
+    },
+    "subagents": {
+      "explore": ["openrouter,meta-llama/llama-3.3-70b-instruct"]
+    }
   }
 }
 ```
@@ -130,7 +178,9 @@ When a request fails, you can configure a list of backup models. The system will
 
 - **Format**: Each backup model format is `provider,model`
 - **Validation**: Backup models must exist in the `Providers` configuration
-- **Flexibility**: Different scenarios can have different fallback lists
+- **Priority**: CCR first checks a route-specific nested key such as `aliases.haiku` or `capabilities.vision`, then a generic scenario key such as `alias`, and finally the legacy flat key. The primary route uses `Fallback.primary`.
+- **Flexibility**: Different aliases, capabilities, and subagent profiles can have different fallback lists. Use `Fallback.subagents.<profile>` for a named subagent profile.
+- **Compatibility**: Lowercase `fallback` and `fallback.default` remain supported for existing configurations. `Fallback` and `Fallback.primary` take precedence.
 - **Optional**: If a scenario doesn't need fallback, omit it or use an empty array
 
 ### Use Cases
@@ -140,10 +190,10 @@ When a request fails, you can configure a list of backup models. The system will
 ```json
 {
   "Router": {
-    "default": "openrouter,anthropic/claude-sonnet-4"
+    "primary": "openrouter,anthropic/claude-sonnet-4"
   },
-  "fallback": {
-    "default": [
+  "Fallback": {
+    "primary": [
       "deepseek,deepseek-chat",
       "aihubmix,Z/glm-4.5"
     ]
@@ -158,13 +208,17 @@ Automatically switches to backup models when the primary model quota is exhauste
 ```json
 {
   "Router": {
-    "background": "volcengine,deepseek-v3-250324"
+    "aliases": {
+      "haiku": "volcengine,deepseek-v3-250324"
+    }
   },
-  "fallback": {
-    "background": [
-      "modelscope,Qwen/Qwen3-Coder-480B-A35B-Instruct",
-      "dashscope,qwen3-coder-plus"
-    ]
+  "Fallback": {
+    "aliases": {
+      "haiku": [
+        "modelscope,Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "dashscope,qwen3-coder-plus"
+      ]
+    }
   }
 }
 ```
@@ -197,7 +251,7 @@ Configure routing per project in `~/.claude/projects/<project-id>/claude-code-ro
 ```json
 {
   "Router": {
-    "default": "groq,llama-3.3-70b-versatile"
+    "primary": "groq,llama-3.3-70b-versatile"
   }
 }
 ```
@@ -211,20 +265,11 @@ Create a custom JavaScript router function:
 1. Create a router file (e.g., `custom-router.js`):
 
 ```javascript
-module.exports = function(config, context) {
-  // Analyze the request context
-  const { scenario, projectId, tokenCount } = context;
-
-  // Custom routing logic
-  if (scenario === 'background') {
-    return 'groq,llama-3.3-70b-versatile';
+module.exports = function(req, config, context) {
+  if (req.body.tools?.some((tool) => tool.type?.startsWith('web_search'))) {
+    return 'gemini,gemini-2.5-flash';
   }
 
-  if (tokenCount > 100000) {
-    return 'gemini,gemini-1.5-pro';
-  }
-
-  // Default
   return 'deepseek,deepseek-chat';
 };
 ```
@@ -237,14 +282,13 @@ export CUSTOM_ROUTER_PATH="/path/to/custom-router.js"
 
 ## Token Counting
 
-The router uses `tiktoken` (cl100k_base) to estimate request token count. This is used for:
+The router exposes a `tiktoken` (cl100k_base) token estimate to custom routers.
+CCR itself does not use it to switch context windows; Claude Code owns context
+capacity and compaction.
 
-- Determining if a request exceeds `longContextThreshold`
-- Custom routing logic based on token count
+### Explicit Model Override
 
-## Subagent Routing
-
-Specify models for subagents using special tags:
+Specify a provider and model directly with the legacy override tag:
 
 ```
 <CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>

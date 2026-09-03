@@ -7,80 +7,119 @@ sidebar_position: 3
 
 配置如何将请求路由到不同的模型。
 
-## 默认路由
+## 主路由
 
-为所有请求设置默认模型：
-
-```json
-{
-  "Router": {
-    "default": "deepseek,deepseek-chat"
-  }
-}
-```
-
-## 内置场景
-
-### 后台任务
-
-将后台任务路由到轻量级模型：
+为不需要能力模型或显式子代理路由的请求设置主模型：
 
 ```json
 {
   "Router": {
-    "background": "groq,llama-3.3-70b-versatile"
+    "primary": "deepseek,deepseek-chat"
   }
 }
 ```
 
-### 思考模式（计划模式）
+`default` 仍作为 `primary` 的兼容字段保留。
 
-将思考密集型任务路由到更强大的模型：
+## 模型别名
+
+Claude Code 子代理可显式选择 `haiku`、`sonnet` 或 `opus`。将这些模型意图映射到合适的 provider：
 
 ```json
 {
   "Router": {
-    "think": "deepseek,deepseek-reasoner"
+    "primary": "deepseek,deepseek-chat",
+    "aliases": {
+      "haiku": "groq,llama-3.3-70b-versatile",
+      "sonnet": "deepseek,deepseek-chat",
+      "opus": "openrouter,anthropic/claude-sonnet-4"
+    }
   }
 }
 ```
 
-### 长上下文
+`[1m]` 由 Claude Code 的上下文策略管理。CCR 将 `sonnet` 和 `sonnet[1m]` 视为同一 alias，且不会按估算 token 数自动切换模型。`background` 仍作为 `aliases.haiku` 的兼容字段保留。
 
-路由长上下文请求：
-
-```json
-{
-  "Router": {
-    "longContextThreshold": 100000,
-    "longContext": "gemini,gemini-2.5-pro"
-  }
-}
-```
+## 能力路由
 
 ### 网络搜索
 
-路由网络搜索任务：
+将声明 Anthropic web search 工具的请求路由到支持搜索的模型：
 
 ```json
 {
   "Router": {
-    "webSearch": "gemini,gemini-2.5-flash"
+    "capabilities": {
+      "webSearch": "gemini,gemini-2.5-flash"
+    }
   }
 }
 ```
 
-### 图像任务
+### 视觉
 
-路由图像相关任务：
+将当前用户消息中的图像路由到视觉模型；历史消息中的图片仍由 CCR Image Agent 兜底处理。
 
 ```json
 {
   "Router": {
-    "image": "gemini,gemini-2.5-pro"
+    "capabilities": {
+      "vision": "gemini,gemini-2.5-pro"
+    }
   }
 }
 ```
+
+旧的 `webSearch` 和 `image` 字段仍分别作为这些能力字段的兼容写法。
+
+## 子代理 Profile
+
+在自定义 Claude Code agent 的 system prompt 中加入明确的路由标签：
+
+```text
+<CCR-ROUTE>explore</CCR-ROUTE>
+```
+
+例如，创建 `~/.claude/agents/ccr-explore.md`（或项目内的
+`.claude/agents/ccr-explore.md`）：
+
+```markdown
+---
+name: ccr-explore
+description: 快速、只读地探索代码库。
+model: haiku
+tools: Read, Glob, Grep
+---
+
+<CCR-ROUTE>explore</CCR-ROUTE>
+
+探索代码库并报告简洁的结论。不要修改文件。
+```
+
+然后在 CCR 中配置该 profile：
+
+```json
+{
+  "Router": {
+    "subagents": {
+      "explore": "groq,llama-3.3-70b-versatile"
+    }
+  },
+  "Fallback": {
+    "subagents": {
+      "explore": ["openrouter,meta-llama/llama-3.3-70b-instruct"]
+    }
+  }
+}
+```
+
+使用 `ccr code --agent ccr-explore` 启动该 agent，或在 Claude Code 中要求使用
+指定的 agent。CCR 会在转发请求前移除标签。
+
+每个命名 profile 都需要在 `Fallback.subagents.<profile>` 中单独配置 fallback；
+它不会继承 agent 的 `haiku`、`sonnet` 或 `opus` alias 的 fallback。旧的
+`<CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>` 显式覆盖标签仍受支持，
+且优先级高于 profile 标签。
 
 ## 故障转移（Fallback）
 
@@ -91,30 +130,30 @@ sidebar_position: 3
 ```json
 {
   "Router": {
-    "default": "deepseek,deepseek-chat",
-    "background": "ollama,qwen2.5-coder:latest",
-    "think": "deepseek,deepseek-reasoner",
-    "longContext": "openrouter,google/gemini-2.5-pro-preview",
-    "longContextThreshold": 60000,
-    "webSearch": "gemini,gemini-2.5-flash"
+    "primary": "deepseek,deepseek-chat",
+    "aliases": {
+      "haiku": "ollama,qwen2.5-coder:latest"
+    },
+    "capabilities": {
+      "webSearch": "gemini,gemini-2.5-flash"
+    }
   },
-  "fallback": {
-    "default": [
+  "Fallback": {
+    "primary": [
       "aihubmix,Z/glm-4.5",
       "openrouter,anthropic/claude-sonnet-4"
     ],
-    "background": [
-      "ollama,qwen2.5-coder:latest"
-    ],
-    "think": [
-      "openrouter,anthropic/claude-3.7-sonnet:thinking"
-    ],
-    "longContext": [
-      "modelscope,Qwen/Qwen3-Coder-480B-A35B-Instruct"
-    ],
-    "webSearch": [
-      "openrouter,anthropic/claude-sonnet-4"
-    ]
+    "aliases": {
+      "haiku": ["ollama,qwen2.5-coder:latest"],
+      "sonnet": ["openrouter,anthropic/claude-sonnet-4"]
+    },
+    "capabilities": {
+      "webSearch": ["openrouter,anthropic/claude-sonnet-4"],
+      "vision": ["gemini,gemini-2.5-pro"]
+    },
+    "subagents": {
+      "explore": ["openrouter,meta-llama/llama-3.3-70b-instruct"]
+    }
   }
 }
 ```
@@ -131,7 +170,9 @@ sidebar_position: 3
 
 - **格式**：每个备用模型格式为 `provider,model`
 - **验证**：备用模型必须在 `Providers` 配置中存在
-- **灵活性**：可以为不同场景配置不同的备用列表
+- **优先级**：CCR 先检查 `aliases.haiku`、`capabilities.vision` 等具体嵌套 key，再检查 `alias` 等通用场景 key，最后检查旧的平铺字段。主路由使用 `Fallback.primary`。
+- **灵活性**：不同 alias、能力和子代理 profile 可以配置不同的备用列表。命名子代理 profile 使用 `Fallback.subagents.<profile>`。
+- **兼容性**：小写 `fallback` 与 `fallback.default` 仍可用于现有配置；`Fallback` 与 `Fallback.primary` 优先。
 - **可选性**：如果某个场景不需要备用，可以不配置或使用空数组
 
 ### 使用场景
@@ -141,10 +182,10 @@ sidebar_position: 3
 ```json
 {
   "Router": {
-    "default": "openrouter,anthropic/claude-sonnet-4"
+    "primary": "openrouter,anthropic/claude-sonnet-4"
   },
-  "fallback": {
-    "default": [
+  "Fallback": {
+    "primary": [
       "deepseek,deepseek-chat",
       "aihubmix,Z/glm-4.5"
     ]
@@ -159,13 +200,17 @@ sidebar_position: 3
 ```json
 {
   "Router": {
-    "background": "volcengine,deepseek-v3-250324"
+    "aliases": {
+      "haiku": "volcengine,deepseek-v3-250324"
+    }
   },
-  "fallback": {
-    "background": [
-      "modelscope,Qwen/Qwen3-Coder-480B-A35B-Instruct",
-      "dashscope,qwen3-coder-plus"
-    ]
+  "Fallback": {
+    "aliases": {
+      "haiku": [
+        "modelscope,Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "dashscope,qwen3-coder-plus"
+      ]
+    }
   }
 }
 ```
@@ -198,7 +243,7 @@ sidebar_position: 3
 ```json
 {
   "Router": {
-    "default": "groq,llama-3.3-70b-versatile"
+    "primary": "groq,llama-3.3-70b-versatile"
   }
 }
 ```
@@ -236,14 +281,11 @@ module.exports = async function(req, config) {
 
 ## Token 计数
 
-路由器使用 `tiktoken` (cl100k_base) 来估算请求 token 数量。这用于：
+路由器会将 `tiktoken` (cl100k_base) token 估算提供给自定义路由器。CCR 本身不会用它切换上下文窗口；上下文容量和 compact 由 Claude Code 管理。
 
-- 确定请求是否超过 `longContextThreshold`
-- 基于 token 数量的自定义路由逻辑
+### 显式模型覆盖
 
-## 子代理路由
-
-使用特殊标签为子代理指定模型：
+使用旧的显式标签直接指定 provider 和 model：
 
 ```
 <CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>
@@ -264,8 +306,8 @@ module.exports = async function(req, config) {
 
 1. 项目级配置
 2. 自定义路由器
-3. 内置场景路由
-4. 默认路由
+3. 显式子代理 profile、能力路由与模型 alias
+4. 主路由
 
 ## 下一步
 
