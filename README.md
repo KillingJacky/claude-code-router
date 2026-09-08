@@ -315,12 +315,15 @@ The `activate` command sets the following environment variables:
 
 - `ANTHROPIC_AUTH_TOKEN`: API key from your configuration
 - `ANTHROPIC_BASE_URL`: The local router endpoint (default: `http://127.0.0.1:3456`)
+- `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`: Enables Claude Code's `/model` picker to list every configured CCR provider/model pair
 - `NO_PROXY`: Set to `127.0.0.1` to prevent proxy interference
 - `DISABLE_TELEMETRY`: Disables telemetry
 - `DISABLE_COST_WARNINGS`: Disables cost warnings
 - `API_TIMEOUT_MS`: API timeout from your configuration
 
 > **Note**: Make sure the Claude Code Router service is running (`ccr start`) before using the activated environment variables. The environment variables are only valid for the current shell session. To make them persistent, you can add `eval "$(ccr activate)"` to your shell configuration file (e.g., `~/.zshrc` or `~/.bashrc`).
+
+After activation, run `/model` in Claude Code to select a configured model directly. Each entry is shown as `provider, model`; CCR routes it to that exact configured provider and model.
 
 #### Providers
 
@@ -330,7 +333,17 @@ The `Providers` array is where you define the different model providers you want
 - `api_base_url`: The full API endpoint for chat completions.
 - `api_key`: Your API key for the provider.
 - `models`: A list of model names available from this provider.
+- `models_1m` (optional): A list of models that support a 1-million-token context window. Each entry must also be present in `models`; Claude Code then shows it as an additional `[1M]` option. Entries that are not in `models` are ignored for gateway discovery.
 - `transformer` (optional): Specifies transformers to process requests and responses.
+
+For example, this configuration shows `gpt-5.4` in Claude Code both normally and as `gpt-5.4 [1M]`, while `gpt-5.4-mini` is shown only normally:
+
+```json
+{
+  "models": ["gpt-5.4", "gpt-5.4-mini"],
+  "models_1m": ["gpt-5.4"]
+}
+```
 
 #### Transformers
 

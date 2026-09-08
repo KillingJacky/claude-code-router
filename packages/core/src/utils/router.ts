@@ -6,6 +6,7 @@ import { CLAUDE_PROJECTS_DIR, HOME_DIR } from "@CCR/shared";
 import { LRUCache } from "lru-cache";
 import { ConfigService } from "../services/config";
 import { TokenizerService } from "../services/tokenizer";
+import { parseGatewayModelId } from "../services/provider";
 
 // Types from @anthropic-ai/sdk
 interface Tool {
@@ -259,6 +260,24 @@ export const getUseModel = async (
   const providers = configService.get<any[]>("providers") || [];
   const Router = projectSpecificRouter?.router || configService.get("Router");
   const routerSource = projectSpecificRouter?.source || "global";
+  const gatewayRoute = parseGatewayModelId(req.body.model);
+
+  if (gatewayRoute) {
+    const finalProvider = providers.find(
+      (provider: any) => provider.name?.toLowerCase() === gatewayRoute.provider.toLowerCase()
+    );
+    const finalModel = finalProvider?.models?.find(
+      (model: any) => model.toLowerCase() === gatewayRoute.model.toLowerCase()
+    );
+    if (finalProvider && finalModel) {
+      return {
+        model: `${finalProvider.name},${finalModel}`,
+        scenarioType: "default",
+        fallbackKey: "default",
+        routerSource: "explicit",
+      };
+    }
+  }
 
   if (req.body.model.includes(",")) {
     const [provider, model] = req.body.model.split(",");
@@ -452,7 +471,10 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
 
   try {
     // Try to get tokenizer config for the current model
-    const [providerName, modelName] = req.body.model.split(",");
+    const gatewayRoute = parseGatewayModelId(req.body.model);
+    const [providerName, modelName] = gatewayRoute
+      ? [gatewayRoute.provider, gatewayRoute.model]
+      : req.body.model.split(",");
     const tokenizerConfig = context.tokenizerService?.getTokenizerConfigForModel(
       providerName,
       modelName

@@ -289,12 +289,15 @@ eval "$(ccr activate)"
 
 - `ANTHROPIC_AUTH_TOKEN`: 来自配置的 API 密钥
 - `ANTHROPIC_BASE_URL`: 本地路由器端点（默认：`http://127.0.0.1:3456`）
+- `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`: 启用 Claude Code 的 `/model` 列表，展示 CCR 配置的全部 provider/model 组合
 - `NO_PROXY`: 设置为 `127.0.0.1` 以防止代理干扰
 - `DISABLE_TELEMETRY`: 禁用遥测
 - `DISABLE_COST_WARNINGS`: 禁用成本警告
 - `API_TIMEOUT_MS`: 来自配置的 API 超时时间
 
 > **注意**：在使用激活的环境变量之前，请确保 Claude Code Router 服务正在运行（`ccr start`）。环境变量仅在当前 shell 会话中有效。要使其持久化，您可以将 `eval "$(ccr activate)"` 添加到您的 shell 配置文件（例如 `~/.zshrc` 或 `~/.bashrc`）中。
+
+激活后，可在 Claude Code 中运行 `/model` 直接选择配置模型。列表项显示为 `provider, model`，CCR 会将其精确路由到对应的 provider 和 model。
 
 #### Providers
 
@@ -304,7 +307,17 @@ eval "$(ccr activate)"
 -   `api_base_url`: 聊天补全的完整 API 端点。
 -   `api_key`: 您提供商的 API 密钥。
 -   `models`: 此提供商可用的模型名称列表。
+-   `models_1m`（可选）: 支持 1M token 上下文窗口的模型列表。这里的每个模型也必须同时存在于 `models` 中，Claude Code 才会额外显示对应的 `[1M]` 选项；不在 `models` 中的条目不会通过网关发现接口展示。
 -   `transformer` (可选): 指定用于处理请求和响应的转换器。
+
+例如，下面的配置会让 Claude Code 同时显示普通的 `gpt-5.4` 和 `gpt-5.4 [1M]`，而 `gpt-5.4-mini` 只显示普通版本：
+
+```json
+{
+  "models": ["gpt-5.4", "gpt-5.4-mini"],
+  "models_1m": ["gpt-5.4"]
+}
+```
 
 #### Transformers
 

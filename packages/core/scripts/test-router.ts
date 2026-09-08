@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { resolveRouterRoute } from "../src/utils/router";
+import { getUseModel, resolveRouterRoute } from "../src/utils/router";
+import {
+  createGatewayModelId,
+  parseGatewayModelId,
+  ProviderService,
+} from "../src/services/provider";
 
 const router = {
   primary: "provider,primary",
@@ -106,4 +111,71 @@ assert.deepEqual(
   { model: "provider,legacy-fast", scenarioType: "alias", fallbackKey: "aliases.haiku" }
 );
 
-console.log("router tests passed");
+const gatewayModelId = createGatewayModelId("openrouter", "anthropic/claude-3.5-sonnet");
+assert.ok(gatewayModelId.startsWith("claude-code-router/"));
+assert.deepEqual(parseGatewayModelId(gatewayModelId), {
+  provider: "openrouter",
+  model: "anthropic/claude-3.5-sonnet",
+  is1m: false,
+});
+const gateway1mModelId = createGatewayModelId(
+  "openrouter",
+  "anthropic/claude-3.5-sonnet",
+  true
+);
+assert.deepEqual(parseGatewayModelId(gateway1mModelId), {
+  provider: "openrouter",
+  model: "anthropic/claude-3.5-sonnet",
+  is1m: true,
+});
+assert.equal(parseGatewayModelId("claude-code-router/not-a-route"), null);
+
+const providerService = new ProviderService(
+  {
+    get: (key: string) => key === "providers"
+      ? [{
+          name: "openrouter",
+          api_base_url: "https://example.test/v1/messages",
+          api_key: "test",
+          models: ["anthropic/claude-3.5-sonnet"],
+          models_1m: ["anthropic/claude-3.5-sonnet"],
+        }]
+      : undefined,
+  } as any,
+  {} as any,
+  { info() {}, error() {} }
+);
+assert.deepEqual(providerService.getGatewayModels(), {
+  object: "list",
+  data: [{
+    id: gatewayModelId,
+    type: "model",
+    display_name: "openrouter, anthropic/claude-3.5-sonnet",
+    description: "CCR model: openrouter,anthropic/claude-3.5-sonnet",
+  }, {
+    id: gateway1mModelId,
+    type: "model",
+    display_name: "openrouter, anthropic/claude-3.5-sonnet [1M]",
+    description: "CCR model: openrouter,anthropic/claude-3.5-sonnet (1M context)",
+  }],
+  has_more: false,
+});
+
+void (async () => {
+  const explicitGatewayRoute = await getUseModel(
+    { body: { model: gateway1mModelId, messages: [] } },
+    {
+      get: (key: string) => key === "providers"
+        ? [{ name: "openrouter", models: ["anthropic/claude-3.5-sonnet"] }]
+        : undefined,
+    } as any
+  );
+  assert.deepEqual(explicitGatewayRoute, {
+    model: "openrouter,anthropic/claude-3.5-sonnet",
+    scenarioType: "default",
+    fallbackKey: "default",
+    routerSource: "explicit",
+  });
+
+  console.log("router tests passed");
+})();

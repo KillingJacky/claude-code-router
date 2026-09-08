@@ -64,7 +64,19 @@ Detailed guide for configuring LLM providers.
 | `HOST` | string | Yes | API base URL |
 | `APIKEY` | string | Yes | API authentication key |
 | `MODELS` | string[] | No | List of available models |
+| `models_1m` | string[] | No | Models from `models` that support 1M context and should also be exposed with a `[1m]` option in Claude Code |
 | `transformers` | string[] | No | List of transformers to apply |
+
+`models_1m` is an additional capability list, not a separate model list. Every entry must also appear in `models`; entries that are not present in `models` are ignored by gateway model discovery. For example:
+
+```json
+{
+  "models": ["gpt-5.4", "gpt-5.4-mini"],
+  "models_1m": ["gpt-5.4"]
+}
+```
+
+Claude Code will show the normal `gpt-5.4` entry and an additional `gpt-5.4 [1M]` entry, while `gpt-5.4-mini` will only have its normal entry.
 
 ## Model Selection
 

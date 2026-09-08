@@ -505,6 +505,12 @@ export const registerApiRoutes = async (
     return { status: "ok", timestamp: new Date().toISOString() };
   });
 
+  // Claude Code discovers gateway models from this endpoint and uses the
+  // returned ID verbatim in subsequent /v1/messages requests.
+  fastify.get("/v1/models", async () => {
+    return fastify.providerService.getGatewayModels();
+  });
+
   const transformersWithEndpoint =
     fastify.transformerService.getTransformersWithEndpoint();
 
@@ -532,6 +538,7 @@ export const registerApiRoutes = async (
             baseUrl: { type: "string" },
             apiKey: { type: "string" },
             models: { type: "array", items: { type: "string" } },
+            models_1m: { type: "array", items: { type: "string" } },
           },
           required: ["id", "name", "type", "baseUrl", "apiKey", "models"],
         },
@@ -628,6 +635,7 @@ export const registerApiRoutes = async (
             baseUrl: { type: "string" },
             apiKey: { type: "string" },
             models: { type: "array", items: { type: "string" } },
+            models_1m: { type: "array", items: { type: "string" } },
             enabled: { type: "boolean" },
           },
         },

@@ -138,7 +138,19 @@ sidebar_position: 2
 | `api_base_url` | string | 是 | API 基础 URL |
 | `api_key` | string | 是 | API 认证密钥 |
 | `models` | string[] | 否 | 可用模型列表 |
+| `models_1m` | string[] | 否 | `models` 中支持 1M 上下文、并需要在 Claude Code 中额外暴露 `[1m]` 选项的模型列表 |
 | `transformer` | object | 否 | 应用的转换器配置 |
+
+`models_1m` 是额外的能力标记列表，不是独立的模型列表。其中的每个模型都必须同时出现在 `models` 中；不在 `models` 中的条目不会通过网关发现接口展示。例如：
+
+```json
+{
+  "models": ["gpt-5.4", "gpt-5.4-mini"],
+  "models_1m": ["gpt-5.4"]
+}
+```
+
+Claude Code 会显示普通的 `gpt-5.4` 和额外的 `gpt-5.4 [1M]`，而 `gpt-5.4-mini` 只显示普通版本。
 
 ## 模型选择
 

@@ -8,6 +8,7 @@ export interface Provider {
   api_base_url: string;
   api_key: string;
   models: string[];
+  models_1m?: string[];
   transformer?: ProviderTransformer;
 }
 

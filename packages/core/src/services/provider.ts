@@ -9,6 +9,47 @@ import {
 import { ConfigService } from "./config"; 
 import { TransformerService } from "./transformer";
 
+const GATEWAY_MODEL_PREFIX = "claude-code-router/";
+
+export interface GatewayModelRoute {
+  provider: string;
+  model: string;
+  is1m: boolean;
+}
+
+/**
+ * Claude Code only discovers gateway model IDs containing "claude" or
+ * "anthropic". Base64url keeps arbitrary configured provider and model names
+ * lossless while the prefix satisfies that discovery requirement.
+ */
+export const createGatewayModelId = (
+  provider: string,
+  model: string,
+  is1m = false
+): string =>
+  `${GATEWAY_MODEL_PREFIX}${Buffer.from(provider).toString("base64url")}/${Buffer.from(model).toString("base64url")}${is1m ? "[1m]" : ""}`;
+
+export const parseGatewayModelId = (modelId: string): GatewayModelRoute | null => {
+  const is1m = /\[1m\]$/i.test(modelId);
+  const normalizedModelId = is1m ? modelId.slice(0, -4) : modelId;
+  if (!normalizedModelId.startsWith(GATEWAY_MODEL_PREFIX)) {
+    return null;
+  }
+
+  const encodedRoute = normalizedModelId.slice(GATEWAY_MODEL_PREFIX.length).split("/");
+  if (encodedRoute.length !== 2 || !encodedRoute[0] || !encodedRoute[1]) {
+    return null;
+  }
+
+  try {
+    const provider = Buffer.from(encodedRoute[0], "base64url").toString("utf8");
+    const model = Buffer.from(encodedRoute[1], "base64url").toString("utf8");
+    return provider && model ? { provider, model, is1m } : null;
+  } catch {
+    return null;
+  }
+};
+
 export class ProviderService {
   private providers: Map<string, LLMProvider> = new Map();
   private modelRoutes: Map<string, ModelRoute> = new Map();
@@ -88,6 +129,7 @@ export class ProviderService {
           baseUrl: providerConfig.api_base_url,
           apiKey: providerConfig.api_key,
           models: providerConfig.models || [],
+          models_1m: providerConfig.models_1m || [],
           transformer: providerConfig.transformer ? transformer : undefined,
         });
 
@@ -282,6 +324,48 @@ export class ProviderService {
     return {
       object: "list",
       data: models,
+    };
+  }
+
+  getGatewayModels(): {
+    object: string;
+    data: Array<{
+      id: string;
+      type: string;
+      display_name: string;
+      description: string;
+    }>;
+    has_more: boolean;
+  } {
+    const models = this.getProviders().flatMap((provider) =>
+      provider.models.flatMap((model) => {
+        const modelEntry = {
+          id: createGatewayModelId(provider.name, model),
+          type: "model",
+          display_name: `${provider.name}, ${model}`,
+          description: `CCR model: ${provider.name},${model}`,
+        };
+        const supports1m = provider.models_1m?.some(
+          (model1m) => model1m.toLowerCase() === model.toLowerCase()
+        );
+        return supports1m
+          ? [
+              modelEntry,
+              {
+                id: createGatewayModelId(provider.name, model, true),
+                type: "model",
+                display_name: `${provider.name}, ${model} [1M]`,
+                description: `CCR model: ${provider.name},${model} (1M context)`,
+              },
+            ]
+          : [modelEntry];
+      })
+    );
+
+    return {
+      object: "list",
+      data: models,
+      has_more: false,
     };
   }
 }
