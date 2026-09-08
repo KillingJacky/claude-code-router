@@ -37,6 +37,16 @@ pnpm dev:ui         # Develop UI (Vite)
 pnpm release        # Build and publish all packages
 ```
 
+#### npm Registry Publishing
+- Publish manually from the repository root; do not rely on an automated publish flow.
+- Include `--provenance=false` so npm opens the local browser authentication flow when required.
+- When publishing the existing root `dist` artifacts, verify the root `package.json` version first, then run:
+  ```bash
+  npm publish --provenance=false
+  ```
+- Confirm the published package and version after npm reports success.
+
+
 ## Core Architecture
 
 ### 1. Routing System (packages/server/src/utils/router.ts)
