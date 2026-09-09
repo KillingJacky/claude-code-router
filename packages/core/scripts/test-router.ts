@@ -5,6 +5,8 @@ import {
   parseGatewayModelId,
   ProviderService,
 } from "../src/services/provider";
+import { AnthropicTransformer } from "../src/transformer/anthropic.transformer";
+import { sanitizeArtifactRequest } from "../src/utils/artifactSchema";
 
 const router = {
   primary: "provider,primary",
@@ -177,5 +179,54 @@ void (async () => {
     routerSource: "explicit",
   });
 
-  console.log("router tests passed");
+  const artifactPattern =
+    "^(?!__.*__$)[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\"\\\\./[\\]]{1,200}$";
+  const artifactSchema = {
+    type: "object",
+    properties: {
+      name: { type: "string", pattern: artifactPattern },
+    },
+  };
+  const ordinarySchema = {
+    type: "object",
+    properties: {
+      value: { type: "string", pattern: "^[a-z]+$" },
+    },
+  };
+  const transformedRequest = await new AnthropicTransformer().transformRequestOut(
+    {
+      model: "gpt-5.6-luna",
+      messages: [],
+      tools: [
+        { name: "Artifact", input_schema: artifactSchema },
+        { name: "OtherTool", input_schema: ordinarySchema },
+      ],
+    },
+    { req: { id: "artifact-test" } },
+  );
+  const transformedArtifactPattern =
+    transformedRequest.tools?.[0].function.parameters.properties.name.pattern;
+  assert.ok(transformedArtifactPattern);
+  assert.equal(transformedArtifactPattern.includes("\\p{"), false);
+  assert.doesNotThrow(() => new RegExp(transformedArtifactPattern));
+  assert.equal(
+    transformedRequest.tools?.[1].function.parameters.properties.value.pattern,
+    "^[a-z]+$",
+  );
+  assert.equal(artifactSchema.properties.name.pattern, artifactPattern);
+
+  const bypassRequest = sanitizeArtifactRequest({
+    model: "claude-sonnet",
+    messages: [],
+    tools: [{ name: "Artifact", input_schema: artifactSchema }],
+  });
+  assert.equal(
+    bypassRequest.tools[0].input_schema.properties.name.pattern.includes(
+      "\\p{",
+    ),
+    false,
+  );
+  assert.equal(bypassRequest.model, "claude-sonnet");
+
+  console.log("router and transformer tests passed");
 })();

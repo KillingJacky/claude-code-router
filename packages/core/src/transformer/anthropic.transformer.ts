@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getThinkLevel } from "@/utils/thinking";
 import { createApiError } from "@/api/middleware";
 import { formatBase64 } from "@/utils/image";
+import { sanitizeArtifactInputSchema } from "@/utils/artifactSchema";
 
 export class AnthropicTransformer implements Transformer {
   name = "Anthropic";
@@ -256,7 +257,10 @@ export class AnthropicTransformer implements Transformer {
       function: {
         name: tool.name,
         description: tool.description || "",
-        parameters: tool.input_schema,
+        parameters:
+          tool.name === "Artifact"
+            ? sanitizeArtifactInputSchema(tool.input_schema)
+            : tool.input_schema,
       },
     }));
   }

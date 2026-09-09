@@ -13,6 +13,7 @@ import { ProviderService } from "@/services/provider";
 import { TransformerService } from "@/services/transformer";
 import { Transformer } from "@/types/transformer";
 import { writeRouteLog } from "@/utils/router";
+import { sanitizeArtifactRequest } from "@/utils/artifactSchema";
 
 // Extend FastifyInstance to include custom services
 declare module "fastify" {
@@ -236,7 +237,10 @@ async function processRequestTransformers(
   headers: any,
   context: any
 ) {
-  let requestBody = body;
+  let requestBody =
+    transformer?.name === "Anthropic"
+      ? sanitizeArtifactRequest(body)
+      : body;
   let config: any = {};
   let bypass = false;
 
