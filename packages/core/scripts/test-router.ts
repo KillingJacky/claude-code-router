@@ -179,6 +179,54 @@ void (async () => {
     routerSource: "explicit",
   });
 
+  const visionConfig = {
+    get: (key: string) => {
+      if (key === "providers") {
+        return [{
+          name: "openrouter",
+          models: ["text-model", "vision-model"],
+        }];
+      }
+      if (key === "Router") {
+        return {
+          primary: "openrouter,text-model",
+          capabilities: { vision: "openrouter,vision-model" },
+        };
+      }
+      return undefined;
+    },
+  } as any;
+  const imageMessages = [{
+    role: "user",
+    content: [{ type: "image", source: {} }],
+  }];
+
+  assert.deepEqual(
+    await getUseModel(
+      { body: { model: "openrouter,text-model", messages: imageMessages } },
+      visionConfig
+    ),
+    {
+      model: "openrouter,vision-model",
+      scenarioType: "image",
+      fallbackKey: "capabilities.vision",
+      routerSource: "global",
+    }
+  );
+
+  assert.deepEqual(
+    await getUseModel(
+      { body: { model: "openrouter,vision-model", messages: imageMessages } },
+      visionConfig
+    ),
+    {
+      model: "openrouter,vision-model",
+      scenarioType: "image",
+      fallbackKey: "capabilities.vision",
+      routerSource: "explicit",
+    }
+  );
+
   const artifactPattern =
     "^(?!__.*__$)[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\"\\\\./[\\]]{1,200}$";
   const artifactSchema = {

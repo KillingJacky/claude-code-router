@@ -130,6 +130,11 @@ const getWebSearchModel = (router: any): string | undefined =>
 const getPrimaryModel = (router: any): string | undefined =>
   router?.primary || router?.default;
 
+const isSameModel = (left: string | undefined, right: string | undefined): boolean =>
+  typeof left === "string" &&
+  typeof right === "string" &&
+  left.toLowerCase() === right.toLowerCase();
+
 export type RouterModelAlias =
   | "haiku"
   | "sonnet"
@@ -262,6 +267,34 @@ export const getUseModel = async (
   const routerSource = projectSpecificRouter?.source || "global";
   const gatewayRoute = parseGatewayModelId(req.body.model);
 
+  const resolveExplicitRoute = (model: string): RouterRouteDecisionWithSource => {
+    const visionModel = getVisionModel(Router);
+    const hasImage = hasCurrentUserImage(req.body?.messages);
+
+    if (!configService.get("forceUseImageAgent") && visionModel && hasImage) {
+      if (isSameModel(model, visionModel)) {
+        return {
+          model,
+          scenarioType: "image",
+          fallbackKey: "capabilities.vision",
+          routerSource: "explicit",
+        };
+      }
+
+      return {
+        ...resolveRouterRoute(req, Router, false),
+        routerSource,
+      };
+    }
+
+    return {
+      model,
+      scenarioType: "default",
+      fallbackKey: "default",
+      routerSource: "explicit",
+    };
+  };
+
   if (gatewayRoute) {
     const finalProvider = providers.find(
       (provider: any) => provider.name?.toLowerCase() === gatewayRoute.provider.toLowerCase()
@@ -270,12 +303,7 @@ export const getUseModel = async (
       (model: any) => model.toLowerCase() === gatewayRoute.model.toLowerCase()
     );
     if (finalProvider && finalModel) {
-      return {
-        model: `${finalProvider.name},${finalModel}`,
-        scenarioType: "default",
-        fallbackKey: "default",
-        routerSource: "explicit",
-      };
+      return resolveExplicitRoute(`${finalProvider.name},${finalModel}`);
     }
   }
 
@@ -288,19 +316,9 @@ export const getUseModel = async (
       (m: any) => m.toLowerCase() === model
     );
     if (finalProvider && finalModel) {
-      return {
-        model: `${finalProvider.name},${finalModel}`,
-        scenarioType: 'default',
-        fallbackKey: 'default',
-        routerSource: 'explicit',
-      };
+      return resolveExplicitRoute(`${finalProvider.name},${finalModel}`);
     }
-    return {
-      model: req.body.model,
-      scenarioType: 'default',
-      fallbackKey: 'default',
-      routerSource: 'explicit',
-    };
+    return resolveExplicitRoute(req.body.model);
   }
 
   return {
