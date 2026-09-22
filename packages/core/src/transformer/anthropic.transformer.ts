@@ -16,6 +16,29 @@ import { createApiError } from "@/api/middleware";
 import { formatBase64 } from "@/utils/image";
 import { sanitizeArtifactInputSchema } from "@/utils/artifactSchema";
 
+const sanitizeToolInput = (toolName: string, input: unknown): unknown => {
+  if (
+    toolName !== "Read" ||
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    (input as Record<string, unknown>).pages !== ""
+  ) {
+    return input;
+  }
+
+  const { pages: _pages, ...sanitizedInput } = input as Record<string, unknown>;
+  return sanitizedInput;
+};
+
+const sanitizeToolArguments = (toolName: string, argumentsJson: string): string => {
+  try {
+    return JSON.stringify(sanitizeToolInput(toolName, JSON.parse(argumentsJson)));
+  } catch {
+    return argumentsJson;
+  }
+};
+
 export class AnthropicTransformer implements Transformer {
   name = "Anthropic";
   endPoint = "/v1/messages";
@@ -279,7 +302,6 @@ export class AnthropicTransformer implements Transformer {
         let hasTextContentStarted = false;
         let hasFinished = false;
         const toolCalls = new Map<number, any>();
-        const toolCallIndexToContentBlockIndex = new Map<number, number>();
         let totalChunks = 0;
         let contentChunks = 0;
         let toolCallChunks = 0;
@@ -346,24 +368,84 @@ export class AnthropicTransformer implements Transformer {
           }
         };
 
+        const flushToolCalls = () => {
+          if (currentContentBlockIndex >= 0) {
+            const contentBlockStop = {
+              type: "content_block_stop",
+              index: currentContentBlockIndex,
+            };
+            safeEnqueue(
+              encoder.encode(
+                `event: content_block_stop\ndata: ${JSON.stringify(
+                  contentBlockStop
+                )}\n\n`
+              )
+            );
+            currentContentBlockIndex = -1;
+          }
+
+          for (const [, toolCall] of [...toolCalls.entries()].sort(
+            ([left], [right]) => left - right
+          )) {
+            const contentBlockStart = {
+              type: "content_block_start",
+              index: toolCall.contentBlockIndex,
+              content_block: {
+                type: "tool_use",
+                id: toolCall.id,
+                name: toolCall.name,
+                input: {},
+              },
+            };
+            safeEnqueue(
+              encoder.encode(
+                `event: content_block_start\ndata: ${JSON.stringify(
+                  contentBlockStart
+                )}\n\n`
+              )
+            );
+
+            const argumentsJson = sanitizeToolArguments(
+              toolCall.name,
+              toolCall.arguments
+            );
+            if (argumentsJson && argumentsJson !== "{}") {
+              const inputDelta = {
+                type: "content_block_delta",
+                index: toolCall.contentBlockIndex,
+                delta: {
+                  type: "input_json_delta",
+                  partial_json: argumentsJson,
+                },
+              };
+              safeEnqueue(
+                encoder.encode(
+                  `event: content_block_delta\ndata: ${JSON.stringify(
+                    inputDelta
+                  )}\n\n`
+                )
+              );
+            }
+
+            const contentBlockStop = {
+              type: "content_block_stop",
+              index: toolCall.contentBlockIndex,
+            };
+            safeEnqueue(
+              encoder.encode(
+                `event: content_block_stop\ndata: ${JSON.stringify(
+                  contentBlockStop
+                )}\n\n`
+              )
+            );
+          }
+          toolCalls.clear();
+        };
+
         const safeClose = () => {
           if (!isClosed) {
             try {
-              // Close any remaining open content block
-              if (currentContentBlockIndex >= 0) {
-                const contentBlockStop = {
-                  type: "content_block_stop",
-                  index: currentContentBlockIndex,
-                };
-                safeEnqueue(
-                  encoder.encode(
-                    `event: content_block_stop\ndata: ${JSON.stringify(
-                      contentBlockStop
-                    )}\n\n`
-                  )
-                );
-                currentContentBlockIndex = -1;
-              }
+              flushToolCalls();
 
               if (stopReasonMessageDelta) {
                 safeEnqueue(
@@ -737,55 +819,14 @@ export class AnthropicTransformer implements Transformer {
                       continue;
                     }
                     processedInThisChunk.add(toolCallIndex);
-                    const isUnknownIndex =
-                      !toolCallIndexToContentBlockIndex.has(toolCallIndex);
+                    const isUnknownIndex = !toolCalls.has(toolCallIndex);
 
                     if (isUnknownIndex) {
-                      // Close any previous content block if open
-                      if (currentContentBlockIndex >= 0) {
-                        const contentBlockStop = {
-                          type: "content_block_stop",
-                          index: currentContentBlockIndex,
-                        };
-                        safeEnqueue(
-                          encoder.encode(
-                            `event: content_block_stop\ndata: ${JSON.stringify(
-                              contentBlockStop
-                            )}\n\n`
-                          )
-                        );
-                        currentContentBlockIndex = -1;
-                      }
-
                       const newContentBlockIndex = assignContentBlockIndex();
-                      toolCallIndexToContentBlockIndex.set(
-                        toolCallIndex,
-                        newContentBlockIndex
-                      );
                       const toolCallId =
                         toolCall.id || `call_${Date.now()}_${toolCallIndex}`;
                       const toolCallName =
                         toolCall.function?.name || `tool_${toolCallIndex}`;
-                      const contentBlockStart = {
-                        type: "content_block_start",
-                        index: newContentBlockIndex,
-                        content_block: {
-                          type: "tool_use",
-                          id: toolCallId,
-                          name: toolCallName,
-                          input: {},
-                        },
-                      };
-
-                      safeEnqueue(
-                        encoder.encode(
-                          `event: content_block_start\ndata: ${JSON.stringify(
-                            contentBlockStart
-                          )}\n\n`
-                        )
-                      );
-                      currentContentBlockIndex = newContentBlockIndex;
-
                       const toolCallInfo = {
                         id: toolCallId,
                         name: toolCallName,
@@ -810,58 +851,10 @@ export class AnthropicTransformer implements Transformer {
                       !isClosed &&
                       !hasFinished
                     ) {
-                      const blockIndex =
-                        toolCallIndexToContentBlockIndex.get(toolCallIndex);
-                      if (blockIndex === undefined) {
-                        continue;
-                      }
                       const currentToolCall = toolCalls.get(toolCallIndex);
                       if (currentToolCall) {
                         currentToolCall.arguments +=
                           toolCall.function.arguments;
-                      }
-
-                      try {
-                        const anthropicChunk = {
-                          type: "content_block_delta",
-                          index: blockIndex,
-                          delta: {
-                            type: "input_json_delta",
-                            partial_json: toolCall.function.arguments,
-                          },
-                        };
-                        safeEnqueue(
-                          encoder.encode(
-                            `event: content_block_delta\ndata: ${JSON.stringify(
-                              anthropicChunk
-                            )}\n\n`
-                          )
-                        );
-                      } catch {
-                        try {
-                          const fixedArgument = toolCall.function.arguments
-                            .replace(/[\x00-\x1F\x7F-\x9F]/g, "")
-                            .replace(/\\/g, "\\\\")
-                            .replace(/"/g, '\\"');
-
-                          const fixedChunk = {
-                            type: "content_block_delta",
-                            index: blockIndex, // Use the correct content block index
-                            delta: {
-                              type: "input_json_delta",
-                              partial_json: fixedArgument,
-                            },
-                          };
-                          safeEnqueue(
-                            encoder.encode(
-                              `event: content_block_delta\ndata: ${JSON.stringify(
-                                fixedChunk
-                              )}\n\n`
-                            )
-                          );
-                        } catch (fixError) {
-                          console.error(fixError);
-                        }
                       }
                     }
                   }
@@ -874,21 +867,7 @@ export class AnthropicTransformer implements Transformer {
                     );
                   }
 
-                  // Close any remaining open content block
-                  if (currentContentBlockIndex >= 0) {
-                    const contentBlockStop = {
-                      type: "content_block_stop",
-                      index: currentContentBlockIndex,
-                    };
-                    safeEnqueue(
-                      encoder.encode(
-                        `event: content_block_stop\ndata: ${JSON.stringify(
-                          contentBlockStop
-                        )}\n\n`
-                      )
-                    );
-                    currentContentBlockIndex = -1;
-                  }
+                  flushToolCalls();
 
                   if (!isClosed) {
                     const stopReasonMapping: Record<string, string> = {
@@ -1018,7 +997,7 @@ export class AnthropicTransformer implements Transformer {
             type: "tool_use",
             id: toolCall.id,
             name: toolCall.function.name,
-            input: parsedInput,
+            input: sanitizeToolInput(toolCall.function.name, parsedInput),
           });
         });
       }

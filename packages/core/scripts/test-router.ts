@@ -227,6 +227,85 @@ void (async () => {
     }
   );
 
+  const transformer = new AnthropicTransformer();
+  transformer.logger = { debug() {} };
+  const toolCallResponse = await transformer.transformResponseIn(
+    new Response(JSON.stringify({
+      id: "chatcmpl-test",
+      model: "test-model",
+      choices: [{
+        finish_reason: "tool_calls",
+        message: {
+          content: null,
+          tool_calls: [
+            {
+              id: "read-call",
+              function: {
+                name: "Read",
+                arguments: JSON.stringify({ file_path: "/tmp/file", pages: "" }),
+              },
+            },
+            {
+              id: "other-call",
+              function: {
+                name: "OtherTool",
+                arguments: JSON.stringify({ pages: "" }),
+              },
+            },
+          ],
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    })),
+    { req: { id: "tool-input-test" } }
+  );
+  const toolCallBody = await toolCallResponse.json();
+  assert.deepEqual(toolCallBody.content[0].input, { file_path: "/tmp/file" });
+  assert.deepEqual(toolCallBody.content[1].input, { pages: "" });
+
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-stream-test",
+          model: "test-model",
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: "read-call",
+                function: {
+                  name: "Read",
+                  arguments: '{"file_path":"/tmp/file","pages":""}',
+                },
+              }],
+            },
+          }],
+        })}\n\n`
+      ));
+      controller.enqueue(new TextEncoder().encode(
+        `data: ${JSON.stringify({
+          choices: [{ delta: {}, finish_reason: "tool_calls" }],
+        })}\n\n`
+      ));
+      controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+  const streamResponse = await transformer.transformResponseIn(
+    new Response(stream, { headers: { "Content-Type": "text/event-stream" } }),
+    { req: { id: "tool-input-stream-test" } }
+  );
+  const streamBody = await streamResponse.text();
+  const streamEvents = streamBody
+    .split("\n\n")
+    .filter(Boolean)
+    .map((event) => JSON.parse(event.slice(event.indexOf("data: ") + 6)));
+  const inputDelta = streamEvents.find(
+    (event) => event.delta?.type === "input_json_delta"
+  );
+  assert.deepEqual(inputDelta.delta.partial_json, '{"file_path":"/tmp/file"}');
+
   const artifactPattern =
     "^(?!__.*__$)[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\"\\\\./[\\]]{1,200}$";
   const artifactSchema = {
